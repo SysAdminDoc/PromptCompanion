@@ -25,6 +25,15 @@ def _body_hash(body: str) -> str:
 
 
 def main() -> int:
+    if not PROMPTS_DIR.exists():
+        log("No data/prompts/ directory found. Run importers first.")
+        return 1
+
+    jsonl_files = sorted(PROMPTS_DIR.glob("*.jsonl"))
+    if not jsonl_files:
+        log("No JSONL files in data/prompts/. Run importers first.")
+        return 1
+
     schema = load_schema()
     validator = Draft202012Validator(schema)
 
@@ -34,7 +43,7 @@ def main() -> int:
     bodies_seen: dict[str, list[str]] = defaultdict(list)
     per_file: dict[str, int] = {}
 
-    for jsonl_path in sorted(PROMPTS_DIR.glob("*.jsonl")):
+    for jsonl_path in jsonl_files:
         file_category = jsonl_path.stem
         records = read_jsonl(jsonl_path)
         per_file[file_category] = len(records)

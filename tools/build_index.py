@@ -78,12 +78,19 @@ END;
 
 
 def main() -> int:
+    if not PROMPTS_DIR.exists() or not list(PROMPTS_DIR.glob("*.jsonl")):
+        log("No JSONL files in data/prompts/. Run importers first.")
+        return 1
+
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
     db_path = INDEX_DIR / "prompts.db"
-    if db_path.exists():
-        db_path.unlink()
+    tmp_path = INDEX_DIR / "prompts.db.tmp"
 
-    conn = sqlite3.connect(db_path)
+    # Build into a temp file so a crash doesn't destroy the existing index
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    conn = sqlite3.connect(str(tmp_path))
     try:
         conn.executescript(SCHEMA)
         cur = conn.cursor()
@@ -126,15 +133,21 @@ def main() -> int:
         conn.commit()
         cur.execute("INSERT INTO prompts_fts(prompts_fts) VALUES('optimize')")
         conn.commit()
-        log(f"Wrote {total} records to {db_path}")
-        for cat, n in sorted(per_category.items()):
-            log(f"  {cat:15s}  {n:5d}")
 
         cur.execute("SELECT COUNT(*) FROM prompts_fts")
         (fts_count,) = cur.fetchone()
-        log(f"FTS rows: {fts_count}")
-    finally:
+    except BaseException:
         conn.close()
+        tmp_path.unlink(missing_ok=True)
+        raise
+    else:
+        conn.close()
+        # Atomic replace: only overwrite old DB on full success
+        tmp_path.replace(db_path)
+        log(f"Wrote {total} records to {db_path}")
+        for cat, n in sorted(per_category.items()):
+            log(f"  {cat:15s}  {n:5d}")
+        log(f"FTS rows: {fts_count}")
 
     return 0
 

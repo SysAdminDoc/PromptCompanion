@@ -182,13 +182,6 @@ QPushButton#accentBtn:disabled {{
     background-color: {C['surface1']};
     color: {C['overlay0']};
 }}
-QPushButton#successBtn {{
-    background-color: {C['green']};
-    color: {C['crust']};
-    border: none;
-    font-weight: 600;
-}}
-
 /* ── Tree & Table ────────────────────────────────────────────── */
 QTreeView, QTableView {{
     background-color: {C['mantle']};
@@ -474,11 +467,12 @@ class PromptDB:
         conditions: list[str] = []
         params: list = []
         if query.strip():
-            conditions.append("p.rowid IN (SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?)")
             safe_q = re.sub(r'[^\w\s]', ' ', query.strip())
-            terms = safe_q.split()
-            fts_query = " ".join(f'"{t}"*' for t in terms if t)
-            params.append(fts_query)
+            terms = [t for t in safe_q.split() if t]
+            if terms:
+                conditions.append("p.rowid IN (SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?)")
+                fts_query = " ".join(f'"{t}"*' for t in terms)
+                params.append(fts_query)
         if category:
             conditions.append("p.category = ?")
             params.append(category)
@@ -850,9 +844,9 @@ class PreviewPane(QWidget):
             for tag in tags[:10]:
                 spans.append(
                     f'<span style="background-color:{C["surface0"]}; color:{C["subtext0"]}; '
-                    f'border-radius:3px; padding:1px 6px; font-size:11px; margin-right:4px;">{tag}</span>'
+                    f'padding:1px 6px; font-size:11px;">{tag}</span>'
                 )
-            self.tags_label.setText("  ".join(spans))
+            self.tags_label.setText("&nbsp; ".join(spans))
             self.tags_label.setVisible(True)
         else:
             self.tags_label.setVisible(False)
@@ -916,12 +910,11 @@ class PreviewPane(QWidget):
             self.body_text.setPlainText(self._get_filled_body())
 
     def _flash_button(self, btn: QPushButton, original_text: str):
-        btn.setObjectName("successBtn")
-        btn.setStyle(btn.style())
+        saved_ss = btn.styleSheet()
+        btn.setStyleSheet(f"background-color: {C['green']}; color: {C['crust']}; border: none; font-weight: 600;")
         btn.setText("Copied")
         def _reset():
-            btn.setObjectName("primaryBtn" if original_text == "Copy Filled" else "")
-            btn.setStyle(btn.style())
+            btn.setStyleSheet(saved_ss)
             btn.setText(original_text)
         QTimer.singleShot(1200, _reset)
 

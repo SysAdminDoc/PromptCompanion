@@ -108,12 +108,18 @@ def load_schema() -> dict:
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
-    """Write records as JSON lines. Sorted by id for stable diffs."""
+    """Write records as JSON lines. Sorted by id for stable diffs. Atomic via temp+rename."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".jsonl.tmp")
     records_sorted = sorted(records, key=lambda r: r["id"])
-    with path.open("w", encoding="utf-8", newline="\n") as fh:
-        for r in records_sorted:
-            fh.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as fh:
+            for r in records_sorted:
+                fh.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -121,10 +127,14 @@ def read_jsonl(path: Path) -> list[dict]:
         return []
     out: list[dict] = []
     with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for lineno, line in enumerate(fh, 1):
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 out.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                log(f"WARN {path.name}:{lineno} skipped (malformed JSON): {exc}")
     return out
 
 
@@ -188,8 +198,12 @@ def dedupe_by_body(prompts_dir: Path | None = None) -> int:
     for h, group in by_hash.items():
         if len(group) <= 1:
             continue
-        # Keep the "best" record: longest title, most tags, earliest created
-        group.sort(key=lambda x: (len(x[1].get("title", "")), len(x[1].get("tags", [])), x[1].get("created", "")), reverse=True)
+        # Keep the best record: most tags, longest title, earliest created
+        group.sort(key=lambda x: (
+            -len(x[1].get("tags", [])),
+            -len(x[1].get("title", "")),
+            x[1].get("created", "z"),  # ascending: earliest timestamp wins
+        ))
         for _, rec in group[1:]:
             remove_ids.add(rec["id"])
 
@@ -389,10 +403,16 @@ _CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
 
 
 def infer_category(title: str, body: str, default: str = "roleplay") -> str:
-    hay = f"{title}\n{body}".lower()
+    hay = f"{title}\n{body[:2000]}".lower()  # cap body scan for performance
     for cat, keywords in _CATEGORY_KEYWORDS:
-        if any(kw in hay for kw in keywords):
-            return cat
+        for kw in keywords:
+            # Multi-word keywords use substring match; single words use word-boundary
+            if " " in kw:
+                if kw in hay:
+                    return cat
+            else:
+                if re.search(r'\b' + re.escape(kw) + r'\b', hay):
+                    return cat
     return default
 
 
