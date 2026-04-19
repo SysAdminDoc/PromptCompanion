@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.3.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
@@ -35,7 +35,7 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.2.0`
+### Current status — `v0.3.0`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
 - [x] 4 importers for upstream sources (CC0 + MIT only)
@@ -46,8 +46,10 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **FTS5 search bar** — full-text search with prefix matching
 - [x] **Filter controls** — role, quality threshold, source
 - [x] **Variable substitution** — fill `{{placeholders}}` inline, copy filled
-- [x] **One-click copy** — raw or with variables filled
-- [ ] Global hotkey + paste-to-active-window — *planned for v0.3.0*
+- [x] **System tray** — minimize to tray, stays running in background
+- [x] **Global hotkey** — Win+Shift+P summons window from anywhere (Windows)
+- [x] **Paste-to-active-window** — copies prompt and pastes into previous window
+- [x] **Export profiles** — Plain Text, Markdown, or JSON copy
 
 ## Bundled Sources
 
@@ -110,6 +112,10 @@ python promptcompanion.py
 
 Requires `PyQt6`. Auto-installed on first run. Reads from `data/index/prompts.db`.
 
+The app minimizes to the system tray on close. On Windows, press **Win+Shift+P** from
+any window to summon PromptCompanion, pick a prompt, and click **Paste to Window** to
+send it directly into ChatGPT, Claude, or any text field.
+
 ## Prompt Record Schema
 
 ```json
@@ -159,7 +165,7 @@ See [data/taxonomy.json](data/taxonomy.json) for the machine-readable vocabulary
 | **0.0.x** | Data foundation, schema, importers, validation |
 | **0.1.x** | More sources, dedupe heuristics, quality scoring |
 | **0.2.x** | PyQt6 desktop GUI, SQLite FTS5 search, variable panel |
-| **0.3.x** | Global hotkey, paste-to-active-window, export profiles |
+| **0.3.x** | System tray, global hotkey, paste-to-window, export profiles |
 | **0.4.x** | Personal overlay (edit bundled prompts without forking) |
 | **1.0.0** | First stable release with full feature set |
 

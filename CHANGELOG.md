@@ -4,6 +4,30 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-18
+
+Paste flow — system tray, global hotkey, paste-to-active-window, export profiles.
+
+### Added
+- **System tray**: app minimizes to tray on close, stays running. Double-click tray icon or right-click > Show to restore.
+- **Global hotkey** (Windows): Win+Shift+P summons the window from anywhere, remembers the previously active window.
+- **Paste to Window** button: copies the prompt (with variables filled + export format applied), switches to the previous window, and simulates Ctrl+V.
+- **Export profiles**: Plain Text (default), Markdown (title + metadata + body), JSON (structured object). Selector in preview bottom bar applies to all copy/paste actions.
+- Styled `QMenu` for tray context menu matching Catppuccin Mocha theme.
+- `QSystemTrayIcon` with balloon notification on minimize.
+
+### Changed
+- Close button now minimizes to tray instead of quitting. Use tray > Quit to exit.
+- `QApplication.setQuitOnLastWindowClosed(False)` to support tray lifecycle.
+- Copy buttons renamed: "Copy" (respects export format), "Copy Filled" (variables + format).
+- Status bar shows hotkey hint on Windows.
+
+### Notes
+- Global hotkey and paste-to-window are Windows-only (Win32 API via ctypes). On other platforms the GUI works normally without these features.
+- Hotkey listener runs in a `QThread` polling `PeekMessageW` to avoid blocking the UI.
+
+---
+
 ## [0.2.0] - 2026-04-18
 
 PyQt6 desktop GUI — the "Zotero for prompts."

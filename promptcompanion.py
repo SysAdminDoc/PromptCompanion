@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.2.0 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.3.0 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search. Catppuccin Mocha dark theme. One-click copy.
+System tray with global hotkey (Win+Shift+P). Paste-to-active-window.
+Export as plain text, markdown, or JSON.
 """
 
 from __future__ import annotations
@@ -12,7 +14,10 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+IS_WIN = sys.platform == "win32"
 
 
 def _bootstrap(packages: list[str]) -> None:
@@ -28,13 +33,13 @@ def _bootstrap(packages: list[str]) -> None:
 
 _bootstrap(["PyQt6"])
 
-from PyQt6.QtCore import Qt, QSortFilterProxyModel, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QIcon, QPixmap, QPainter
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QIcon, QAction
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QSplitter,
-    QStatusBar, QTreeView, QTableView, QVBoxLayout, QWidget, QAbstractItemView,
-    QFormLayout, QFrame, QGroupBox, QSizePolicy,
+    QTreeView, QTableView, QVBoxLayout, QWidget, QAbstractItemView,
+    QFormLayout, QFrame, QGroupBox, QSystemTrayIcon, QMenu,
 )
 
 
@@ -43,7 +48,7 @@ ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "index" / "prompts.db"
 LOGO_PATH = ROOT / "logo.png"
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # ── Catppuccin Mocha ───────────────────────────────────────────────
 C = {
@@ -119,6 +124,16 @@ QPushButton#copyBtn {{
 }}
 QPushButton#copyBtn:hover {{
     background-color: {C['blue']};
+}}
+QPushButton#pasteBtn {{
+    background-color: {C['teal']};
+    color: {C['crust']};
+    border: none;
+    font-weight: 600;
+    padding: 8px 20px;
+}}
+QPushButton#pasteBtn:hover {{
+    background-color: {C['green']};
 }}
 QTreeView, QTableView {{
     background-color: {C['mantle']};
@@ -254,10 +269,91 @@ QFrame#divider {{
     background-color: {C['surface0']};
     max-height: 1px;
 }}
+QMenu {{
+    background-color: {C['surface0']};
+    color: {C['text']};
+    border: 1px solid {C['surface1']};
+    padding: 4px;
+}}
+QMenu::item {{
+    padding: 6px 24px 6px 12px;
+    border-radius: 4px;
+}}
+QMenu::item:selected {{
+    background-color: {C['surface1']};
+    color: {C['lavender']};
+}}
 """
 
-# ── Var regex ──────────────────────────────────────────────────────
 VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+
+
+# ── Win32 helpers (Windows only) ──────────────────────────────────
+if IS_WIN:
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    MOD_SHIFT = 0x0004
+    MOD_WIN = 0x0008
+    MOD_NOREPEAT = 0x4000
+    HOTKEY_ID = 0xBFFF
+    VK_P = 0x50
+
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_KEYUP = 0x0002
+    VK_CONTROL = 0xA2
+    VK_V = 0x56
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", ctypes.wintypes.WORD), ("wScan", ctypes.wintypes.WORD),
+                     ("dwFlags", ctypes.wintypes.DWORD), ("time", ctypes.wintypes.DWORD),
+                     ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class INPUT(ctypes.Structure):
+        class _INPUT(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+        _fields_ = [("type", ctypes.wintypes.DWORD), ("_input", _INPUT)]
+
+    def _send_ctrl_v():
+        """Simulate Ctrl+V keypress."""
+        inputs = (INPUT * 4)()
+        for i, (vk, flags) in enumerate([
+            (VK_CONTROL, 0), (VK_V, 0),
+            (VK_V, KEYEVENTF_KEYUP), (VK_CONTROL, KEYEVENTF_KEYUP),
+        ]):
+            inputs[i].type = INPUT_KEYBOARD
+            inputs[i]._input.ki.wVk = vk
+            inputs[i]._input.ki.dwFlags = flags
+        user32.SendInput(4, ctypes.pointer(inputs[0]), ctypes.sizeof(INPUT))
+
+
+# ── Global hotkey listener thread (Windows) ───────────────────────
+class HotkeyThread(QThread):
+    triggered = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self._running = True
+
+    def run(self):
+        if not IS_WIN:
+            return
+        user32.RegisterHotKey(None, HOTKEY_ID, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_P)
+        msg = ctypes.wintypes.MSG()
+        while self._running:
+            if user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                if msg.message == 0x0312 and msg.wParam == HOTKEY_ID:
+                    self.triggered.emit()
+            else:
+                self.msleep(50)
+        user32.UnregisterHotKey(None, HOTKEY_ID)
+
+    def stop(self):
+        self._running = False
+        self.wait(2000)
 
 
 # ── Database layer ─────────────────────────────────────────────────
@@ -286,7 +382,6 @@ class PromptDB:
 
         if query.strip():
             conditions.append("p.rowid IN (SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?)")
-            # Escape FTS5 special chars and add prefix matching
             safe_q = re.sub(r'[^\w\s]', ' ', query.strip())
             terms = safe_q.split()
             fts_query = " ".join(f'"{t}"*' for t in terms if t)
@@ -327,23 +422,48 @@ class PromptDB:
         return [r["src"] for r in rows]
 
 
-# ── Quality badge helper ──────────────────────────────────────────
-def quality_label(q: int) -> QLabel:
-    lbl = QLabel(str(q))
-    if q >= 60:
-        lbl.setObjectName("qualityHigh")
-    elif q >= 35:
-        lbl.setObjectName("qualityMid")
-    else:
-        lbl.setObjectName("qualityLow")
-    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    lbl.setFixedWidth(32)
-    return lbl
+# ── Export formatters ─────────────────────────────────────────────
+def export_plain(rec: dict, body: str) -> str:
+    return body
+
+def export_markdown(rec: dict, body: str) -> str:
+    tags = json.loads(rec.get("tags", "[]")) if isinstance(rec.get("tags"), str) else rec.get("tags", [])
+    lines = [f"# {rec['title']}", ""]
+    meta = []
+    if rec.get("author"):
+        meta.append(f"**Author:** {rec['author']}")
+    meta.append(f"**Role:** {rec['role']}")
+    meta.append(f"**Category:** {rec['category']}")
+    if tags:
+        meta.append(f"**Tags:** {', '.join(tags)}")
+    lines.append(" | ".join(meta))
+    lines.extend(["", "---", "", body, ""])
+    return "\n".join(lines)
+
+def export_json(rec: dict, body: str) -> str:
+    obj = {
+        "title": rec["title"],
+        "body": body,
+        "role": rec["role"],
+        "category": rec["category"],
+    }
+    if rec.get("author"):
+        obj["author"] = rec["author"]
+    tags = json.loads(rec.get("tags", "[]")) if isinstance(rec.get("tags"), str) else rec.get("tags", [])
+    if tags:
+        obj["tags"] = tags
+    return json.dumps(obj, indent=2, ensure_ascii=False)
+
+EXPORTERS = {
+    "Plain Text": export_plain,
+    "Markdown": export_markdown,
+    "JSON": export_json,
+}
 
 
 # ── Category tree ─────────────────────────────────────────────────
 class CategoryTree(QTreeView):
-    category_selected = pyqtSignal(str)  # "" = all
+    category_selected = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -422,7 +542,6 @@ class PromptTable(QTableView):
             title_item = QStandardItem(rec["title"])
             cat_item = QStandardItem(rec["category"].replace("_", " ").title())
             role_item = QStandardItem(rec["role"])
-            # Extract source key from id
             src_key = rec["id"].split("-")[0] if "-" in rec["id"] else ""
             src_item = QStandardItem(src_key)
 
@@ -445,6 +564,8 @@ class PromptTable(QTableView):
 
 # ── Preview pane ──────────────────────────────────────────────────
 class PreviewPane(QWidget):
+    paste_requested = pyqtSignal(str)  # emits text to paste
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current: dict | None = None
@@ -494,7 +615,7 @@ class PreviewPane(QWidget):
         self.vars_group.setVisible(False)
         layout.addWidget(self.vars_group)
 
-        # Bottom bar: copy button
+        # Bottom bar
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
 
@@ -502,16 +623,28 @@ class PreviewPane(QWidget):
         self.quality_display.setFixedWidth(60)
         bottom.addWidget(self.quality_display)
 
+        # Export format selector
+        self.export_combo = QComboBox()
+        self.export_combo.addItems(list(EXPORTERS.keys()))
+        self.export_combo.setFixedWidth(110)
+        bottom.addWidget(self.export_combo)
+
         bottom.addStretch()
 
-        self.copy_raw_btn = QPushButton("Copy Raw")
-        self.copy_raw_btn.clicked.connect(self._copy_raw)
+        self.copy_raw_btn = QPushButton("Copy")
+        self.copy_raw_btn.clicked.connect(self._copy_exported)
         bottom.addWidget(self.copy_raw_btn)
 
-        self.copy_btn = QPushButton("Copy with Variables")
+        self.copy_btn = QPushButton("Copy Filled")
         self.copy_btn.setObjectName("copyBtn")
         self.copy_btn.clicked.connect(self._copy_filled)
         bottom.addWidget(self.copy_btn)
+
+        if IS_WIN:
+            self.paste_btn = QPushButton("Paste to Window")
+            self.paste_btn.setObjectName("pasteBtn")
+            self.paste_btn.clicked.connect(self._paste_to_window)
+            bottom.addWidget(self.paste_btn)
 
         layout.addLayout(bottom)
 
@@ -519,7 +652,6 @@ class PreviewPane(QWidget):
         self._current = rec
         self.title_label.setText(rec["title"])
 
-        # Meta
         parts = []
         if rec.get("author"):
             parts.append(f"by {rec['author']}")
@@ -528,7 +660,6 @@ class PreviewPane(QWidget):
         parts.append(rec["category"])
         self.meta_label.setText("  ·  ".join(parts))
 
-        # Tags
         while self.tags_layout.count() > 1:
             child = self.tags_layout.takeAt(0)
             if child.widget():
@@ -539,10 +670,8 @@ class PreviewPane(QWidget):
             lbl.setObjectName("tagLabel")
             self.tags_layout.insertWidget(self.tags_layout.count() - 1, lbl)
 
-        # Body
         self.body_text.setPlainText(rec["body"])
 
-        # Quality
         q = rec.get("quality", 0)
         self.quality_display.setText(f"Q: {q}")
         if q >= 60:
@@ -552,7 +681,6 @@ class PreviewPane(QWidget):
         else:
             self.quality_display.setStyleSheet(f"color: {C['overlay0']}; font-weight: 700; font-size: 13px;")
 
-        # Variables
         self._var_inputs.clear()
         while self.vars_layout.rowCount() > 0:
             self.vars_layout.removeRow(0)
@@ -582,21 +710,34 @@ class PreviewPane(QWidget):
             body = re.sub(r"\{\{\s*" + re.escape(name) + r"\s*\}\}", value, body)
         return body
 
+    def _get_export_text(self, body: str) -> str:
+        if not self._current:
+            return body
+        fmt = self.export_combo.currentText()
+        exporter = EXPORTERS.get(fmt, export_plain)
+        return exporter(self._current, body)
+
     def _update_preview(self):
         if self._current:
             self.body_text.setPlainText(self._get_filled_body())
 
-    def _copy_raw(self):
+    def _copy_exported(self):
         if self._current:
-            QApplication.clipboard().setText(self._current["body"])
+            text = self._get_export_text(self._current["body"])
+            QApplication.clipboard().setText(text)
             self.copy_raw_btn.setText("Copied!")
-            QTimer.singleShot(1500, lambda: self.copy_raw_btn.setText("Copy Raw"))
+            QTimer.singleShot(1500, lambda: self.copy_raw_btn.setText("Copy"))
 
     def _copy_filled(self):
-        text = self._get_filled_body()
+        text = self._get_export_text(self._get_filled_body())
         QApplication.clipboard().setText(text)
         self.copy_btn.setText("Copied!")
-        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy with Variables"))
+        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy Filled"))
+
+    def _paste_to_window(self):
+        body = self._get_filled_body() if self._var_inputs else (self._current["body"] if self._current else "")
+        text = self._get_export_text(body)
+        self.paste_requested.emit(text)
 
 
 # ── Main window ───────────────────────────────────────────────────
@@ -605,14 +746,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"PromptCompanion v{VERSION}")
         self.resize(1280, 780)
+        self._prev_hwnd = None
+        self._hotkey_thread = None
 
         if LOGO_PATH.exists():
             self.setWindowIcon(QIcon(str(LOGO_PATH)))
 
-        # DB
         self.db = PromptDB(DB_PATH)
 
-        # Central widget
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
@@ -665,7 +806,6 @@ class MainWindow(QMainWindow):
         self.prompt_table = PromptTable()
         splitter.addWidget(self.prompt_table)
 
-        # Preview in scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -677,7 +817,11 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(splitter, stretch=1)
 
         # ── Status bar ─────────────────────────────────────────────
-        self.statusBar().showMessage(f"PromptCompanion v{VERSION}")
+        hotkey_hint = "  |  Win+Shift+P to summon" if IS_WIN else ""
+        self.statusBar().showMessage(f"PromptCompanion v{VERSION}{hotkey_hint}")
+
+        # ── System tray ────────────────────────────────────────────
+        self._setup_tray()
 
         # ── Load data ──────────────────────────────────────────────
         cats = self.db.categories()
@@ -687,23 +831,95 @@ class MainWindow(QMainWindow):
         # ── Connections ────────────────────────────────────────────
         self.cat_tree.category_selected.connect(self._on_filter_changed)
         self.prompt_table.prompt_selected.connect(self.preview.show_prompt)
+        self.preview.paste_requested.connect(self._do_paste_to_window)
         self.role_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.quality_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.source_combo.currentIndexChanged.connect(self._on_filter_changed)
 
-        # Debounce search
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(250)
         self._search_timer.timeout.connect(self._on_filter_changed)
         self.search_input.textChanged.connect(lambda: self._search_timer.start())
 
-        # Initial load
         self._current_category = ""
         self._on_filter_changed()
 
+        # ── Global hotkey ──────────────────────────────────────────
+        if IS_WIN:
+            self._hotkey_thread = HotkeyThread()
+            self._hotkey_thread.triggered.connect(self._on_hotkey)
+            self._hotkey_thread.start()
+
+    def _setup_tray(self):
+        self.tray = QSystemTrayIcon(self)
+        if LOGO_PATH.exists():
+            self.tray.setIcon(QIcon(str(LOGO_PATH)))
+        else:
+            self.tray.setIcon(self.windowIcon())
+        self.tray.setToolTip(f"PromptCompanion v{VERSION}")
+
+        menu = QMenu()
+        show_action = QAction("Show", self)
+        show_action.triggered.connect(self._show_from_tray)
+        menu.addAction(show_action)
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self._quit_app)
+        menu.addAction(quit_action)
+
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.show()
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._show_from_tray()
+
+    def _show_from_tray(self):
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _quit_app(self):
+        if self._hotkey_thread:
+            self._hotkey_thread.stop()
+        self.tray.hide()
+        self.db.close()
+        QApplication.quit()
+
+    def _on_hotkey(self):
+        """Win+Shift+P pressed — remember foreground window and summon."""
+        if IS_WIN:
+            self._prev_hwnd = user32.GetForegroundWindow()
+        if self.isMinimized() or not self.isVisible():
+            self.showNormal()
+        self.activateWindow()
+        self.raise_()
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _do_paste_to_window(self, text: str):
+        """Copy text to clipboard, switch to previous window, simulate Ctrl+V."""
+        if not IS_WIN or not self._prev_hwnd:
+            QApplication.clipboard().setText(text)
+            self.statusBar().showMessage("Copied to clipboard (no target window)")
+            return
+
+        QApplication.clipboard().setText(text)
+        hwnd = self._prev_hwnd
+
+        # Minimize self, activate target
+        self.showMinimized()
+        QApplication.processEvents()
+        time.sleep(0.15)
+
+        user32.SetForegroundWindow(hwnd)
+        time.sleep(0.2)
+        _send_ctrl_v()
+
+        self.statusBar().showMessage("Pasted to window")
+
     def _on_filter_changed(self, *_args):
-        # If called from category tree signal, update tracked category
         sender = self.sender()
         if isinstance(sender, CategoryTree):
             cat = _args[0] if _args else ""
@@ -738,8 +954,15 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        self.db.close()
-        super().closeEvent(event)
+        # Minimize to tray instead of quitting
+        event.ignore()
+        self.hide()
+        self.tray.showMessage(
+            "PromptCompanion",
+            "Running in tray. Win+Shift+P to summon.",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000,
+        )
 
 
 # ── Entry point ───────────────────────────────────────────────────
@@ -752,6 +975,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLESHEET)
+    app.setQuitOnLastWindowClosed(False)
 
     if LOGO_PATH.exists():
         app.setWindowIcon(QIcon(str(LOGO_PATH)))
