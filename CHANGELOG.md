@@ -4,6 +4,27 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-18
+
+Two new sources — Chinese prompts and ChatGPT system prompts.
+
+### Added
+- `tools/import_zhprompts.py` — imports `PlexPt/awesome-chatgpt-prompts-zh` (MIT). 124 zh + 124 zh-TW Chinese-language "act as" prompts in JSON format.
+- `tools/import_chatsys.py` — imports `mustvlad/ChatGPT-System-Prompts` (MIT). 46 categorized system prompts across educational, entertainment, utility, and other domains.
+- Source registry updated with `zhprompts` and `chatsys` entries.
+- ATTRIBUTION.md updated with both new sources.
+
+### Changed
+- Dataset grew from 3,751 to **4,045 records** (294 added, 0 duplicate bodies).
+- Multilingual support: dataset now includes `zh` and `zh-TW` language prompts alongside English.
+- Total sources: **6** (up from 4).
+- README updated with new sources, importers, and prompt count badge.
+
+### Stats
+- 6 sources, 11 category files, 4,045 unique records, 0 validation errors, 0 duplicate bodies.
+
+---
+
 ## [0.3.2] - 2026-04-18
 
 Engineering hardening audit — 15 issues found and fixed across 7 files.

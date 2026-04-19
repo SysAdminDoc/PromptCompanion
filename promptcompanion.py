@@ -49,7 +49,7 @@ ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "index" / "prompts.db"
 LOGO_PATH = ROOT / "logo.png"
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 
 # ── Catppuccin Mocha ───────────────────────────────────────────────
 C = {
@@ -1022,7 +1022,7 @@ class MainWindow(QMainWindow):
         # ── Status bar ─────────────────────────────────────────────
         hotkey = "Win+Shift+P to summon" if IS_WIN else ""
         self.statusBar().showMessage(
-            f"{self._total:,} prompts from 4 sources" +
+            f"{self._total:,} prompts from 6 sources" +
             (f"   |   {hotkey}" if hotkey else "")
         )
 

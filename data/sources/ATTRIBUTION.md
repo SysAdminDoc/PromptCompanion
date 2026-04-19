@@ -50,6 +50,28 @@ Only sources under CC0-1.0 or MIT licenses are bundled.
 
 > MIT License. See upstream repository for full text.
 
+## PlexPt/awesome-chatgpt-prompts-zh
+
+- **Repo**: https://github.com/PlexPt/awesome-chatgpt-prompts-zh
+- **Author**: PlexPt
+- **License**: MIT
+- **Imported via**: `tools/import_zhprompts.py`
+- **Default category**: `roleplay`
+- **Languages**: `zh` (Simplified Chinese), `zh-TW` (Traditional Chinese)
+
+> MIT License. See upstream repository for full text.
+
+## mustvlad/ChatGPT-System-Prompts
+
+- **Repo**: https://github.com/mustvlad/ChatGPT-System-Prompts
+- **Author**: mustvlad (Vlad Alexandru)
+- **License**: MIT
+- **Imported via**: `tools/import_chatsys.py`
+- **Default category**: `system`
+- **Format**: Categorized markdown tree (`prompts/<category>/<slug>.md`)
+
+> MIT License. See upstream repository for full text.
+
 ---
 
 If you are an upstream author and would like a change to attribution, crediting,
