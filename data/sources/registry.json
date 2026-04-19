@@ -38,6 +38,18 @@
       "importer": "tools/import_system.py",
       "default_category": "system",
       "notes": "System prompts for Claude, ChatGPT, Cursor, v0, Perplexity, Windsurf."
+    },
+    {
+      "key": "llmprompt",
+      "name": "LLM-Prompt-Library",
+      "repo": "https://github.com/abilzerian/LLM-Prompt-Library.git",
+      "author": "abilzerian",
+      "license": "MIT",
+      "format": "markdown+jinja2",
+      "entry_path": ".",
+      "importer": "tools/import_llmprompt.py",
+      "default_category": "system",
+      "notes": "62 markdown prompts + 164 Jinja2 templates across finance, legal, medical, code, research, etc."
     }
   ]
 }

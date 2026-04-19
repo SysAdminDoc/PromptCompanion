@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -158,6 +159,147 @@ def merge_into_prompts_dir(new_records: list[dict]) -> dict[str, int]:
         write_jsonl(PROMPTS_DIR / f"{cat}.jsonl", list(bucket.values()))
         counts[cat] = len(bucket)
     return counts
+
+
+# ------------------------------------------------------------------ #
+# Body-hash deduplication
+# ------------------------------------------------------------------ #
+
+def _body_hash(body: str) -> str:
+    return hashlib.sha256(body.strip().lower().encode("utf-8")).hexdigest()[:16]
+
+
+def dedupe_by_body(prompts_dir: Path | None = None) -> int:
+    """Remove exact-body duplicates across all JSONL files. Keeps the record with the
+    most metadata (longest title, most tags). Returns number of records removed."""
+    prompts_dir = prompts_dir or PROMPTS_DIR
+    all_records: list[tuple[str, dict]] = []
+    for jsonl_path in sorted(prompts_dir.glob("*.jsonl")):
+        for rec in read_jsonl(jsonl_path):
+            all_records.append((jsonl_path.stem, rec))
+
+    # Group by body hash
+    by_hash: dict[str, list[tuple[str, dict]]] = {}
+    for cat, rec in all_records:
+        h = _body_hash(rec["body"])
+        by_hash.setdefault(h, []).append((cat, rec))
+
+    remove_ids: set[str] = set()
+    for h, group in by_hash.items():
+        if len(group) <= 1:
+            continue
+        # Keep the "best" record: longest title, most tags, earliest created
+        group.sort(key=lambda x: (len(x[1].get("title", "")), len(x[1].get("tags", [])), x[1].get("created", "")), reverse=True)
+        for _, rec in group[1:]:
+            remove_ids.add(rec["id"])
+
+    if not remove_ids:
+        return 0
+
+    # Rewrite files without removed IDs
+    for jsonl_path in sorted(prompts_dir.glob("*.jsonl")):
+        records = read_jsonl(jsonl_path)
+        filtered = [r for r in records if r["id"] not in remove_ids]
+        if len(filtered) < len(records):
+            write_jsonl(jsonl_path, filtered)
+
+    return len(remove_ids)
+
+
+# ------------------------------------------------------------------ #
+# Quality scoring (0-100)
+# ------------------------------------------------------------------ #
+
+_STRUCTURE_RE = re.compile(r"^(#{1,4}\s|[0-9]+\.\s|- |\* )", re.MULTILINE)
+_EXAMPLE_RE = re.compile(r"(?i)(example|sample|output|response)\s*[:\n]")
+
+
+def score_quality(rec: dict) -> int:
+    """Heuristic quality score for a prompt record. Returns 0-100."""
+    body = rec.get("body", "")
+    title = rec.get("title", "")
+    score = 0
+
+    # --- Body length (0-25) ---
+    blen = len(body)
+    if blen < 80:
+        score += 5
+    elif blen < 200:
+        score += 12
+    elif blen < 800:
+        score += 25
+    elif blen < 3000:
+        score += 20
+    else:
+        score += 15  # very long can be noisy
+
+    # --- Has structure: headers, numbered lists, bullets (0-20) ---
+    structure_matches = len(_STRUCTURE_RE.findall(body))
+    if structure_matches >= 5:
+        score += 20
+    elif structure_matches >= 2:
+        score += 14
+    elif structure_matches >= 1:
+        score += 8
+
+    # --- Has example/sample output (0-15) ---
+    if _EXAMPLE_RE.search(body):
+        score += 15
+
+    # --- Has variables / template placeholders (0-10) ---
+    variables = rec.get("variables", [])
+    if len(variables) >= 3:
+        score += 10
+    elif len(variables) >= 1:
+        score += 6
+
+    # --- Title quality (0-10) ---
+    if 5 < len(title) < 100:
+        score += 7
+    if title[0].isupper() if title else False:
+        score += 3
+
+    # --- Tags present (0-5) ---
+    tags = rec.get("tags", [])
+    if len(tags) >= 3:
+        score += 5
+    elif len(tags) >= 1:
+        score += 3
+
+    # --- Clear role assignment (0-5) ---
+    if rec.get("role") == "system":
+        score += 5
+    elif rec.get("role") == "user":
+        score += 3
+
+    # --- Penalty: jailbreak / ignore-instructions patterns (0 to -10) ---
+    body_lower = body[:500].lower()
+    if any(p in body_lower for p in ("ignore all prior", "ignore previous", "jailbreak", "dan mode")):
+        score -= 10
+
+    # --- Penalty: very short title (0 to -5) ---
+    if len(title) <= 3:
+        score -= 5
+
+    return max(0, min(100, score))
+
+
+def apply_quality_scores(prompts_dir: Path | None = None) -> int:
+    """Score all records and write back. Returns total records scored."""
+    prompts_dir = prompts_dir or PROMPTS_DIR
+    total = 0
+    for jsonl_path in sorted(prompts_dir.glob("*.jsonl")):
+        records = read_jsonl(jsonl_path)
+        changed = False
+        for rec in records:
+            q = score_quality(rec)
+            if rec.get("quality") != q:
+                rec["quality"] = q
+                changed = True
+            total += 1
+        if changed:
+            write_jsonl(jsonl_path, records)
+    return total
 
 
 def build_record(

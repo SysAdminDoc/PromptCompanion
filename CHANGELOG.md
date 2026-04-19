@@ -4,6 +4,27 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-04-18
+
+Fourth source, body-hash deduplication, and quality scoring.
+
+### Added
+- `tools/import_llmprompt.py` — parses `abilzerian/LLM-Prompt-Library` (62 markdown prompts + 149 Jinja2 templates).
+- Body-hash deduplication in `_common.py` — removes exact-body duplicates across all JSONL files, keeping the record with the most metadata.
+- Quality scoring heuristic (0-100) in `_common.py` — scores every record on body length, structure, examples, variables, title quality, tags, and role clarity. Penalizes jailbreak patterns.
+- `uncategorized.jsonl` bucket for prompts that resist auto-categorization (2 records).
+
+### Changed
+- Dataset grew from 3,562 to **3,751 records** (210 added from LLM-Prompt-Library, 21 duplicates removed).
+- Every record now carries a `quality` score (min 6, max 88, avg 48.4, median 50).
+- Registry updated with 4th source entry for `llmprompt`.
+- README badges updated to v0.1.0 with prompt count.
+
+### Stats
+- 4 sources, 11 category files, 3,751 unique records, 0 validation errors, 0 duplicate bodies.
+
+---
+
 ## [0.0.1] - 2026-04-18
 
 Initial scaffold — data foundation phase.

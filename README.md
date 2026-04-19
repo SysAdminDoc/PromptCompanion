@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.0.1-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
-  <img src="https://img.shields.io/badge/dataset-seeded-brightgreen?style=flat-square" alt="dataset status" />
+  <img src="https://img.shields.io/badge/prompts-3%2C751-brightgreen?style=flat-square" alt="prompts" />
 </p>
 
 ---
@@ -29,13 +29,15 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.0.1` (data-foundation phase)
+### Current status — `v0.1.0`
 
 - [x] Prompt record JSON Schema
 - [x] Category + tag taxonomy
-- [x] Importers for upstream sources (CC0 + MIT only)
-- [x] Validation + deduplication pipeline
-- [x] SQLite FTS5 index builder
+- [x] 4 importers for upstream sources (CC0 + MIT only)
+- [x] Body-hash deduplication (exact-match removal)
+- [x] Quality scoring (0-100 heuristic on every record)
+- [x] Validation pipeline + SQLite FTS5 index builder
+- [x] 3,751 curated prompts across 11 categories
 - [ ] Desktop GUI (PyQt6, Catppuccin Mocha) — *planned for v0.2.0*
 - [ ] Variable substitution UI — *planned for v0.2.0*
 - [ ] Global hotkey + paste-to-active-window — *planned for v0.3.0*
@@ -47,7 +49,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 | [f/awesome-chatgpt-prompts](https://github.com/f/awesome-chatgpt-prompts) | CC0-1.0 | Bundled |
 | [0xeb/TheBigPromptLibrary](https://github.com/0xeb/TheBigPromptLibrary) | MIT | Bundled |
 | [dontriskit/awesome-ai-system-prompts](https://github.com/dontriskit/awesome-ai-system-prompts) | MIT | Bundled |
-| [abilzerian/LLM-Prompt-Library](https://github.com/abilzerian/LLM-Prompt-Library) | MIT | Planned |
+| [abilzerian/LLM-Prompt-Library](https://github.com/abilzerian/LLM-Prompt-Library) | MIT | Bundled |
 
 Each record retains its upstream `source`, `author`, and `license` fields for attribution.
 Only CC0 and MIT sources are bundled to keep the aggregate dataset permissively licensed.
@@ -67,6 +69,7 @@ PromptCompanion/
 │   ├── import_awesome.py  # Parse f/awesome-chatgpt-prompts CSV
 │   ├── import_bigprompt.py# Parse TheBigPromptLibrary markdown tree
 │   ├── import_system.py   # Parse awesome-ai-system-prompts markdown tree
+│   ├── import_llmprompt.py# Parse LLM-Prompt-Library markdown + Jinja2
 │   ├── validate.py        # Schema validation + deduplication
 │   └── build_index.py     # Compile SQLite FTS5 search index
 ├── docs/
@@ -84,6 +87,7 @@ python tools/fetch_sources.py      # Clone upstream prompt repos
 python tools/import_awesome.py     # Parse CSV → data/prompts/*.jsonl
 python tools/import_bigprompt.py   # Parse markdown tree
 python tools/import_system.py      # Parse system-prompt collection
+python tools/import_llmprompt.py   # Parse LLM-Prompt-Library (md + j2)
 python tools/validate.py           # Schema check + dedupe report
 python tools/build_index.py        # Emit data/index/prompts.db (FTS5)
 ```
@@ -108,6 +112,7 @@ Python 3.10+. All scripts auto-install dependencies on first run via `_bootstrap
   "license": "CC0-1.0",
   "version": 1,
   "created": "2026-04-18T00:00:00Z",
+  "quality": 55,
   "updated": "2026-04-18T00:00:00Z"
 }
 ```
