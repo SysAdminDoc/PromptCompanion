@@ -107,6 +107,11 @@ def load_schema() -> dict:
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
+def _sanitize_jsonl_line(line: str) -> str:
+    """Escape U+2028/U+2029 (Unicode line separators) that break splitlines()-based JSONL readers."""
+    return line.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
 def write_jsonl(path: Path, records: list[dict]) -> None:
     """Write records as JSON lines. Sorted by id for stable diffs. Atomic via temp+rename."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,7 +120,8 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
     try:
         with tmp.open("w", encoding="utf-8", newline="\n") as fh:
             for r in records_sorted:
-                fh.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+                line = json.dumps(r, ensure_ascii=False, sort_keys=True)
+                fh.write(_sanitize_jsonl_line(line) + "\n")
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)

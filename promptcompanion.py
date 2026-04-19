@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.5.1 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.5.2 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -58,7 +58,7 @@ LOGO_PATH = ROOT / "logo.png"
 USER_DIR.mkdir(parents=True, exist_ok=True)
 USER_DB_PATH = USER_DIR / "user.db"
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {

@@ -4,6 +4,25 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-04-18
+
+Title normalization and data quality audit.
+
+### Fixed
+- **Title normalization**: 1,725 titles cleaned across all JSONL files. Removed markdown links (`[text](url)` -> `text`), raw URLs, bold markers (`**text**`), backtick code formatting, fenced code block markers, leading heading markers (`#`), attribution prefixes ("Contributed by..."), and trailing punctuation.
+- **U+2028 line separator bug**: Bodies containing Unicode Line Separator (U+2028) broke `splitlines()`-based JSONL readers. `write_jsonl` now escapes U+2028/U+2029 in all output.
+- **Empty body cleanup**: 1 record dropped (`awesome-mc`) where body was identical to title with no other content.
+- **Body title echo**: Titles duplicated at start of body are now stripped.
+
+### Added
+- `tools/normalize_titles.py` — reusable title normalization script with `--dry-run` mode. Handles markdown stripping, URL removal, attribution cleanup, body repair, and safe truncation to 120 chars.
+
+### Changed
+- Dataset: 3,797 -> **3,796 records** (1 garbage record removed).
+- `tools/_common.py`: `write_jsonl` now sanitizes U+2028/U+2029 Unicode line separators to prevent JSONL corruption.
+
+---
+
 ## [0.5.1] - 2026-04-18
 
 Premium UX polish pass and build reliability.
