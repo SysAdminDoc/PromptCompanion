@@ -39,9 +39,12 @@ CREATE TABLE prompts (
     author        TEXT NOT NULL DEFAULT '',
     license       TEXT NOT NULL,
     version       INTEGER NOT NULL,
+    quality       INTEGER NOT NULL DEFAULT 0,
     created       TEXT NOT NULL,
     updated       TEXT NOT NULL
 );
+
+CREATE INDEX idx_prompts_quality ON prompts(quality);
 
 CREATE INDEX idx_prompts_category ON prompts(category);
 CREATE INDEX idx_prompts_language ON prompts(language);
@@ -96,8 +99,8 @@ def main() -> int:
                     INSERT INTO prompts
                     (id, title, body, role, category, tags, variables,
                      target_models, language, source, author, license,
-                     version, created, updated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     version, quality, created, updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         r["id"],
@@ -113,6 +116,7 @@ def main() -> int:
                         r.get("author") or "",
                         r["license"],
                         r["version"],
+                        r.get("quality", 0),
                         r["created"],
                         r["updated"],
                     ),

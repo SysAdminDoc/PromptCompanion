@@ -4,6 +4,28 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-18
+
+PyQt6 desktop GUI — the "Zotero for prompts."
+
+### Added
+- `promptcompanion.py` — single-file PyQt6 desktop application.
+- Three-pane layout: category tree (with counts) | prompt list (sortable by quality) | preview pane.
+- FTS5 full-text search bar with debounced input and prefix matching.
+- Filter controls: role (system/user/assistant), quality threshold (20+/40+/60+), source key.
+- Variable substitution panel: detects `{{placeholders}}` in prompt body, lets you fill inline.
+- One-click copy: "Copy Raw" and "Copy with Variables" buttons with toast feedback.
+- Catppuccin Mocha dark theme applied globally via QSS stylesheet.
+- Quality badges: color-coded (green 60+, yellow 35+, grey <35) in list and preview.
+- Tag pills displayed in preview pane metadata section.
+
+### Changed
+- `tools/build_index.py` now includes `quality` column + index in SQLite schema.
+- `requirements.txt` updated with `PyQt6>=6.6.0`.
+- README updated with GUI section, launch instructions, and feature checklist.
+
+---
+
 ## [0.1.0] - 2026-04-18
 
 Fourth source, body-hash deduplication, and quality scoring.

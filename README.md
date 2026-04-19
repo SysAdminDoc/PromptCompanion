@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.2.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
@@ -22,24 +22,25 @@
 
 **PromptCompanion** is a library-first tool for AI prompts. It aggregates, cleans, and
 categorizes the best publicly-available prompts from multiple upstream sources into a
-single structured dataset, and will eventually expose them through a dark-themed desktop
-GUI with fast search, variable substitution, and one-click copy-to-clipboard.
+single structured dataset, and exposes them through a dark-themed desktop GUI with fast search,
+variable substitution, and one-click copy-to-clipboard.
 
 Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library onto a
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.1.0`
+### Current status — `v0.2.0`
 
-- [x] Prompt record JSON Schema
-- [x] Category + tag taxonomy
+- [x] Prompt record JSON Schema + category/tag taxonomy
 - [x] 4 importers for upstream sources (CC0 + MIT only)
-- [x] Body-hash deduplication (exact-match removal)
-- [x] Quality scoring (0-100 heuristic on every record)
-- [x] Validation pipeline + SQLite FTS5 index builder
-- [x] 3,751 curated prompts across 11 categories
-- [ ] Desktop GUI (PyQt6, Catppuccin Mocha) — *planned for v0.2.0*
-- [ ] Variable substitution UI — *planned for v0.2.0*
+- [x] Body-hash deduplication + quality scoring (0-100)
+- [x] SQLite FTS5 search index (<50ms over 3,751 prompts)
+- [x] **PyQt6 desktop GUI** — Catppuccin Mocha dark theme
+- [x] **Three-pane layout** — category tree | prompt list | preview
+- [x] **FTS5 search bar** — full-text search with prefix matching
+- [x] **Filter controls** — role, quality threshold, source
+- [x] **Variable substitution** — fill `{{placeholders}}` inline, copy filled
+- [x] **One-click copy** — raw or with variables filled
 - [ ] Global hotkey + paste-to-active-window — *planned for v0.3.0*
 
 ## Bundled Sources
@@ -72,6 +73,7 @@ PromptCompanion/
 │   ├── import_llmprompt.py# Parse LLM-Prompt-Library markdown + Jinja2
 │   ├── validate.py        # Schema validation + deduplication
 │   └── build_index.py     # Compile SQLite FTS5 search index
+├── promptcompanion.py       # Desktop GUI (PyQt6)
 ├── docs/
 │   └── SCHEMA.md          # Human-readable schema documentation
 ├── CHANGELOG.md
@@ -93,6 +95,14 @@ python tools/build_index.py        # Emit data/index/prompts.db (FTS5)
 ```
 
 Python 3.10+. All scripts auto-install dependencies on first run via `_bootstrap()`.
+
+## Launch the GUI
+
+```bash
+python promptcompanion.py
+```
+
+Requires `PyQt6`. Auto-installed on first run. Reads from `data/index/prompts.db`.
 
 ## Prompt Record Schema
 
