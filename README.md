@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="PromptCompanion" width="180" />
+  <img src="logo.png" alt="PromptCompanion" width="180" />
 </p>
 
 <h1 align="center">PromptCompanion</h1>
