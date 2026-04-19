@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Working notes (local only)
+CLAUDE.md
+CODEX_CHANGELOG.md
+.scratch/
+*.scratch.*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Vendored upstream sources (cloned, not committed — regenerated via tools/fetch_sources.py)
+data/sources/upstream/
+
+# Generated artifacts
+data/index/*.db
+data/index/*.sqlite
+data/build/
+*.log
+
+# Secrets
+*.pem
+*.key
+.env
+.env.local

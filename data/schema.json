@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SysAdminDoc/PromptCompanion/blob/main/data/schema.json",
+  "title": "PromptCompanion Prompt Record",
+  "description": "A single curated AI prompt. One JSON object per line in data/prompts/<category>.jsonl.",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "body",
+    "role",
+    "category",
+    "tags",
+    "target_models",
+    "language",
+    "source",
+    "license",
+    "version",
+    "created",
+    "updated"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,127}$",
+      "description": "Stable slug: <source-key>-<normalized-title>. Lowercase, dash-separated."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Short human-readable label shown in the prompt list."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The prompt text itself. Markdown allowed. May contain {{variable}} placeholders."
+    },
+    "role": {
+      "type": "string",
+      "enum": ["system", "user", "assistant"],
+      "description": "How the prompt should be sent to the model. Defaults to 'user' unless explicitly a system prompt."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "development",
+        "writing",
+        "research",
+        "creative",
+        "business",
+        "productivity",
+        "system",
+        "roleplay",
+        "translation",
+        "specialized",
+        "uncategorized"
+      ],
+      "description": "Single top-level category bucket. See data/taxonomy.json."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+      },
+      "maxItems": 12,
+      "uniqueItems": true,
+      "description": "Cross-cutting labels. Free-form but prefer vocabulary in data/taxonomy.json."
+    },
+    "variables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_]{0,63}$" },
+          "default": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      },
+      "default": [],
+      "description": "Named {{variable}} placeholders parsed from the body."
+    },
+    "target_models": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Model IDs this prompt is known to work with. Use 'any' if model-agnostic."
+    },
+    "language": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+      "description": "BCP-47 language code. Default 'en'."
+    },
+    "source": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL of the upstream source (repo, website, etc)."
+    },
+    "author": {
+      "type": "string",
+      "description": "Attribution string for the original prompt author."
+    },
+    "license": {
+      "type": "string",
+      "enum": ["CC0-1.0", "MIT", "Apache-2.0", "CC-BY-4.0", "CC-BY-SA-4.0", "Unlicense", "Unknown"],
+      "description": "SPDX identifier of the per-record license. Only CC0-1.0 and MIT are currently bundled."
+    },
+    "tested_with": {
+      "type": "string",
+      "description": "Free-text notes on models the prompt has been verified against."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Record version. Bumped on curation edits."
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of first import."
+    },
+    "updated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of most recent edit."
+    },
+    "quality": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Optional curator quality score (0-100). Reserved for v0.1.x."
+    },
+    "deprecated": {
+      "type": "boolean",
+      "default": false,
+      "description": "Marked true when a prompt is outdated or superseded but preserved for history."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Curator notes (why this is useful, caveats, known failure modes)."
+    }
+  }
+}

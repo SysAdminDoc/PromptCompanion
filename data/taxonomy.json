@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "Category + tag vocabulary for PromptCompanion. Categories are exclusive top-level buckets. Tags are cross-cutting.",
+  "categories": {
+    "development": {
+      "label": "Development",
+      "description": "Code generation, review, debugging, refactoring, DevOps, shell, SQL, regex.",
+      "example_tags": ["codegen", "code-review", "debugging", "refactor", "sql", "regex", "devops", "shell", "api", "testing"]
+    },
+    "writing": {
+      "label": "Writing",
+      "description": "Blog posts, copy, email, editing, rewriting, summarization.",
+      "example_tags": ["blog", "copy", "email", "editing", "rewrite", "summarize", "tone", "outline"]
+    },
+    "research": {
+      "label": "Research & Analysis",
+      "description": "Literature review, data analysis, fact-checking, comparative studies.",
+      "example_tags": ["literature", "analysis", "fact-check", "compare", "synthesis", "citation"]
+    },
+    "creative": {
+      "label": "Creative",
+      "description": "Fiction, worldbuilding, poetry, lyrics, image-generation prompts.",
+      "example_tags": ["fiction", "worldbuilding", "poetry", "lyrics", "midjourney", "sdxl", "dalle", "image-prompt"]
+    },
+    "business": {
+      "label": "Business",
+      "description": "Strategy, meeting notes, reports, pitches, hiring, HR.",
+      "example_tags": ["strategy", "meeting", "report", "pitch", "hiring", "hr", "sales", "marketing"]
+    },
+    "productivity": {
+      "label": "Productivity",
+      "description": "Task planning, learning aids, teaching, flashcards, time management.",
+      "example_tags": ["planning", "learning", "teaching", "flashcards", "gtd", "time-management"]
+    },
+    "system": {
+      "label": "System Prompts",
+      "description": "Agent personas, Custom GPT system prompts, foundational role definitions.",
+      "example_tags": ["persona", "agent", "custom-gpt", "assistant", "system"]
+    },
+    "roleplay": {
+      "label": "Role-Play / Act As",
+      "description": "'Act as <role>' prompts in the style of f/awesome-chatgpt-prompts.",
+      "example_tags": ["act-as", "simulation", "character", "interview"]
+    },
+    "translation": {
+      "label": "Translation & Language",
+      "description": "Translation, grammar correction, localization, language learning.",
+      "example_tags": ["translate", "grammar", "localize", "language-learning"]
+    },
+    "specialized": {
+      "label": "Specialized Domains",
+      "description": "Medical, legal, finance, academic. Each is gated with a disclaimer in the GUI.",
+      "example_tags": ["medical", "legal", "finance", "academic", "scientific"]
+    },
+    "uncategorized": {
+      "label": "Uncategorized",
+      "description": "Fallback bucket for prompts whose category could not be inferred. Importers should minimize use of this bucket.",
+      "example_tags": []
+    }
+  },
+  "tag_dimensions": {
+    "difficulty": ["beginner", "intermediate", "advanced"],
+    "length": ["short", "medium", "long"],
+    "risk": ["safe", "caution", "nsfw", "jailbreak"]
+  }
+}

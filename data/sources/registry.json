@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "description": "Registry of upstream prompt sources. Only CC0-1.0 and MIT sources are bundled into data/prompts/.",
+  "license_allowlist": ["CC0-1.0", "MIT"],
+  "sources": [
+    {
+      "key": "awesome",
+      "name": "awesome-chatgpt-prompts",
+      "repo": "https://github.com/f/awesome-chatgpt-prompts.git",
+      "author": "f (Fatih Kadir Akın)",
+      "license": "CC0-1.0",
+      "format": "csv",
+      "entry_path": "prompts.csv",
+      "importer": "tools/import_awesome.py",
+      "default_category": "roleplay",
+      "notes": "Canonical 'act as' dataset. Columns: act, prompt, for_devs."
+    },
+    {
+      "key": "bigprompt",
+      "name": "TheBigPromptLibrary",
+      "repo": "https://github.com/0xeb/TheBigPromptLibrary.git",
+      "author": "0xeb",
+      "license": "MIT",
+      "format": "markdown-tree",
+      "entry_path": ".",
+      "importer": "tools/import_bigprompt.py",
+      "default_category": "system",
+      "notes": "Categorized markdown tree. Sections: SystemPrompts, CustomInstructions, Security, Articles."
+    },
+    {
+      "key": "sysprompt",
+      "name": "awesome-ai-system-prompts",
+      "repo": "https://github.com/dontriskit/awesome-ai-system-prompts.git",
+      "author": "dontriskit",
+      "license": "MIT",
+      "format": "markdown-tree",
+      "entry_path": ".",
+      "importer": "tools/import_system.py",
+      "default_category": "system",
+      "notes": "System prompts for Claude, ChatGPT, Cursor, v0, Perplexity, Windsurf."
+    }
+  ]
+}
