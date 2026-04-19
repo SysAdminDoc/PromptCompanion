@@ -4,6 +4,27 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-04-18
+
+Comprehensive prompt library audit and quality pass.
+
+### Fixed
+- **GPT title extraction**: 1,570 records titled "GPT URL" now have real GPT names extracted from body metadata (`GPT Title:` field).
+- **Title deduplication**: 94 within-source title duplicates removed (multiple versions of same GPT/system prompt — kept highest quality version).
+- **Near-duplicate bodies**: 23 records with identical first-500-chars removed (kept best quality/longest body).
+- **Non-English cleanup**: 140 non-English records removed (CJK, Cyrillic, Arabic content in an English-only dataset).
+- **Cross-source duplicates**: 26 cross-source title duplicates removed (e.g., same prompt in awesome + chatsys).
+- **Garbage records**: 2 records removed (tiny body <40 chars, unfixable title).
+
+### Added
+- `tools/audit_fix.py` — comprehensive audit + fix script with `--dry-run` mode. Handles GPT title extraction, non-English removal, body/title dedup, URL cleanup, title truncation.
+
+### Changed
+- Dataset: 3,796 -> **3,511 records** (285 removed: 140 non-English, 94 title dupes, 23 body dupes, 26 cross-source dupes, 2 garbage).
+- All 1,570 "GPT URL" placeholder titles replaced with actual GPT names.
+
+---
+
 ## [0.5.2] - 2026-04-18
 
 Title normalization and data quality audit.
