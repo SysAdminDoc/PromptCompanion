@@ -52,18 +52,6 @@
       "notes": "62 markdown prompts + 164 Jinja2 templates across finance, legal, medical, code, research, etc."
     },
     {
-      "key": "zhprompts",
-      "name": "awesome-chatgpt-prompts-zh",
-      "repo": "https://github.com/PlexPt/awesome-chatgpt-prompts-zh.git",
-      "author": "PlexPt",
-      "license": "MIT",
-      "format": "json",
-      "entry_path": ".",
-      "importer": "tools/import_zhprompts.py",
-      "default_category": "roleplay",
-      "notes": "Chinese-language 'act as' prompts. 124 zh + 124 zh-TW in JSON format."
-    },
-    {
       "key": "chatsys",
       "name": "ChatGPT-System-Prompts",
       "repo": "https://github.com/mustvlad/ChatGPT-System-Prompts.git",

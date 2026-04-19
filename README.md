@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.0-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.5.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
-  <img src="https://img.shields.io/badge/prompts-4%2C045-brightgreen?style=flat-square" alt="prompts" />
+  <img src="https://img.shields.io/badge/prompts-3%2C797-brightgreen?style=flat-square" alt="prompts" />
 </p>
 
 ---
@@ -35,21 +35,24 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.4.0`
+### Current status — `v0.5.0`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
-- [x] 6 importers for upstream sources (CC0 + MIT only)
+- [x] 5 importers for upstream sources (CC0 + MIT only, English)
 - [x] Body-hash deduplication + quality scoring (0-100)
-- [x] SQLite FTS5 search index (<50ms over 4,045 prompts)
+- [x] SQLite FTS5 search with **bm25 relevance ranking** (title 10x, tags 5x, author 2x)
 - [x] **PyQt6 desktop GUI** — Catppuccin Mocha dark theme
 - [x] **Three-pane layout** — category tree | prompt list | preview
 - [x] **FTS5 search bar** — full-text search with prefix matching
 - [x] **Filter controls** — role, quality threshold, source
 - [x] **Variable substitution** — fill `{{placeholders}}` inline, copy filled
+- [x] **Favorites** — star any prompt, browse your favorites collection
+- [x] **History** — recently copied/pasted prompts tracked automatically
 - [x] **System tray** — minimize to tray, stays running in background
 - [x] **Global hotkey** — Win+Shift+P summons window from anywhere (Windows)
 - [x] **Paste-to-active-window** — copies prompt and pastes into previous window
 - [x] **Export profiles** — Plain Text, Markdown, or JSON copy
+- [x] **PyInstaller build** — `python build.py` produces a single `PromptCompanion.exe`
 
 ## Bundled Sources
 
@@ -59,7 +62,6 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 | [0xeb/TheBigPromptLibrary](https://github.com/0xeb/TheBigPromptLibrary) | MIT | Bundled |
 | [dontriskit/awesome-ai-system-prompts](https://github.com/dontriskit/awesome-ai-system-prompts) | MIT | Bundled |
 | [abilzerian/LLM-Prompt-Library](https://github.com/abilzerian/LLM-Prompt-Library) | MIT | Bundled |
-| [PlexPt/awesome-chatgpt-prompts-zh](https://github.com/PlexPt/awesome-chatgpt-prompts-zh) | MIT | Bundled |
 | [mustvlad/ChatGPT-System-Prompts](https://github.com/mustvlad/ChatGPT-System-Prompts) | MIT | Bundled |
 
 Each record retains its upstream `source`, `author`, and `license` fields for attribution.
@@ -81,7 +83,6 @@ PromptCompanion/
 │   ├── import_bigprompt.py# Parse TheBigPromptLibrary markdown tree
 │   ├── import_system.py   # Parse awesome-ai-system-prompts markdown tree
 │   ├── import_llmprompt.py# Parse LLM-Prompt-Library markdown + Jinja2
-│   ├── import_zhprompts.py# Parse awesome-chatgpt-prompts-zh JSON
 │   ├── import_chatsys.py  # Parse ChatGPT-System-Prompts markdown
 │   ├── validate.py        # Schema validation + deduplication
 │   └── build_index.py     # Compile SQLite FTS5 search index
@@ -102,7 +103,6 @@ python tools/import_awesome.py     # Parse CSV → data/prompts/*.jsonl
 python tools/import_bigprompt.py   # Parse markdown tree
 python tools/import_system.py      # Parse system-prompt collection
 python tools/import_llmprompt.py   # Parse LLM-Prompt-Library (md + j2)
-python tools/import_zhprompts.py   # Parse Chinese prompt collection (zh + zh-TW)
 python tools/import_chatsys.py    # Parse ChatGPT-System-Prompts
 python tools/validate.py           # Schema check + dedupe report
 python tools/build_index.py        # Emit data/index/prompts.db (FTS5)
@@ -117,11 +117,17 @@ python promptcompanion.py
 ```
 
 Requires `PyQt6`. Auto-installed on first run. Reads from `data/index/prompts.db`.
-Supports English and Chinese (zh / zh-TW) prompts.
-
 The app minimizes to the system tray on close. On Windows, press **Win+Shift+P** from
 any window to summon PromptCompanion, pick a prompt, and click **Paste to App** to
 send it directly into ChatGPT, Claude, or any text field.
+
+## Build Standalone Exe
+
+```bash
+python build.py    # Produces dist/PromptCompanion.exe (single file, ~30 MB)
+```
+
+Bundles the prompt database and logo. User data (favorites, history) stored in `~/.promptcompanion/`.
 
 ## Prompt Record Schema
 

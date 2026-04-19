@@ -34,8 +34,10 @@ data/sources/upstream/
 # Generated artifacts
 data/index/*.db
 data/index/*.sqlite
+data/user/
 data/build/
 *.log
+*.spec
 
 # Secrets
 *.pem

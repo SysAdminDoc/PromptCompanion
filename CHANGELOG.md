@@ -4,6 +4,28 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-18
+
+Favorites, history, smart search ranking, PyInstaller build.
+
+### Added
+- **Favorites**: star button (★/☆) in preview header. Click to toggle. "Favorites" pseudo-category in the tree with count. Stored in `data/user/user.db` (persistent across sessions).
+- **History**: every copy/paste action is recorded. "Recent" pseudo-category in the tree shows the last 100 unique prompts used. Empty states ("No favorites yet", "No history yet") with contextual guidance.
+- **Smart FTS5 ranking**: search results now use bm25 relevance scoring with weighted fields — title matches are 10x more important than body, tags 5x, author 2x. Title-matching prompts surface first instead of being buried.
+- **PyInstaller build script**: `build.py` produces a single `PromptCompanion.exe` bundling the prompt database and logo. User data (favorites, history) stored in `~/.promptcompanion/` for persistence across updates.
+- `PromptDB.get_by_ids()` method for efficient ordered ID-based lookups (used by favorites/recent).
+- `UserDB` class managing favorites table + history table with auto-pruning (keeps last 500 entries).
+- `build.py` and `dist/` added to `.gitignore`.
+
+### Changed
+- Removed non-English prompts (248 zh/zh-TW records) and zhprompts source — English-only dataset.
+- Dataset: 4,045 → **3,797 records** across 5 sources.
+- Preview pane: favorite star button in header row, `action_performed` and `favorite_toggled` signals for tracking.
+- Category tree: "Favorites" (yellow) and "Recent" (blue) shown above category list.
+- Path resolution: `ROOT` and `USER_DIR` adapt for PyInstaller frozen mode (`sys._MEIPASS`).
+
+---
+
 ## [0.4.0] - 2026-04-18
 
 Two new sources — Chinese prompts and ChatGPT system prompts.
