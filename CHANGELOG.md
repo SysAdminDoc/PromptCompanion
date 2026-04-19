@@ -4,6 +4,31 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-04-18
+
+Engineering hardening audit — 15 issues found and fixed across 7 files.
+
+### Fixed
+- **P0 Crash**: FTS5 `MATCH` with empty query after stripping special chars (e.g. searching `+++`) no longer crashes SQLite — the FTS clause is skipped when all terms strip to empty.
+- **P0 Crash**: Malformed JSON lines in JSONL files are now logged and skipped instead of crashing the entire import/validate/index pipeline.
+- **P0 Data loss**: `write_jsonl` now uses atomic temp-file-then-rename — a crash mid-write no longer corrupts the JSONL file.
+- **P0 Data loss**: `build_index.py` now builds into a temp DB and replaces on success — a crash mid-build preserves the previous working index.
+- **P1 Logic**: `dedupe_by_body` sort order fixed — now correctly keeps the earliest-created record as the canonical copy (was keeping latest due to `reverse=True` on timestamp strings).
+- **P1 Logic**: `infer_category` single-word keywords now use word-boundary `\b` regex to prevent false matches (e.g. "write" no longer matches "typewriter", "plan" no longer matches "airplane").
+- **P1 Logic**: `import_llmprompt.py` fenced block regex now accepts any language identifier (`python`, `json`, etc.) — was restricted to `markdown`/`text`/empty.
+
+### Improved
+- **Robustness**: `import_awesome.py` CSV opened with `utf-8-sig` encoding to handle BOM transparently.
+- **Robustness**: `build_index.py` and `validate.py` exit early with clear message if prompts directory or JSONL files are missing.
+- **Platform**: GUI system tray fallback — if `QSystemTrayIcon` is unavailable (some Linux window managers), the close button quits the app normally instead of trapping the user with no exit path.
+- **GUI**: `_flash_button` replaced fragile `setObjectName`+`setStyle` hack with direct `setStyleSheet` save/restore — no longer risks permanently restyled buttons under rapid clicking.
+- **GUI**: Tags HTML removed `border-radius` from inline styles (unsupported by Qt's rich text engine).
+- **Maintainability**: `_dedupe_ids` extracted to `_common.dedupe_ids()` — removed duplicate copies from `import_awesome.py` and `import_llmprompt.py`.
+- **Documentation**: `ATTRIBUTION.md` updated with missing 4th source (`abilzerian/LLM-Prompt-Library`).
+- Removed dead `successBtn` QSS rule.
+
+---
+
 ## [0.3.1] - 2026-04-18
 
 Premium UX/UI polish pass.
