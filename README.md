@@ -18,6 +18,12 @@
 
 ---
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="PromptCompanion GUI" width="900" />
+</p>
+
+---
+
 ## What is this?
 
 **PromptCompanion** is a library-first tool for AI prompts. It aggregates, cleans, and
