@@ -36,6 +36,7 @@ data/index/*.db
 data/index/*.sqlite
 data/user/
 data/build/
+logo.ico
 *.log
 *.spec
 

@@ -4,6 +4,28 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-04-18
+
+Premium UX polish pass and build reliability.
+
+### Improved
+- **Design system**: Standardized radius (6/8/10px), type scale (11/12/13/16px), spacing rhythm (4-32px) across all components.
+- **Keyboard shortcuts**: Ctrl+K and Ctrl+F to focus search, Escape to clear search or unfocus.
+- **Toolbar**: Visual separator between search and filter combos. Count badge styled as a pill. All filter combos normalized to equal widths.
+- **Category tree**: Visual separator between special categories (All/Favorites/Recent) and regular ones. Removed indentation for cleaner flat list.
+- **Preview pane**: Symmetrical margins, better spacing rhythm between header/meta/tags/body. Wider favorite button with pointer cursor. Renamed "Copy Filled" to "Copy with Variables" for clarity.
+- **Body text**: Font fallback chain (Cascadia Code, Fira Code, JetBrains Mono, Consolas) via `setFamilies()`. Increased padding.
+- **Empty states**: Each state now has a contextual icon. Better copy ("No recent prompts" instead of "No history yet"). Multi-line subtitles for readability.
+- **Button states**: All three tiers (default/primary/accent) now have distinct pressed states. Inputs show subtle border on hover before focus ring.
+- **Scrollbars**: Wider (8px) with rounded handles for easier grabbing.
+- **Splitter**: 3px grab area with hover highlight but 1px visual line.
+- **Status bar**: Top border separator, increased padding, better contrast.
+- **All buttons**: Pointer cursor on clickable elements.
+- **Build script**: Generates `.ico` from logo. Cleans stale artifacts. Hidden imports for PyQt6. Excludes unnecessary modules to reduce size.
+- **Freeze support**: Added `multiprocessing.freeze_support()` to prevent infinite restart loop in PyInstaller `--onefile` builds.
+
+---
+
 ## [0.5.0] - 2026-04-18
 
 Favorites, history, smart search ranking, PyInstaller build.
