@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (
     build_record,
+    dedupe_ids,
     ensure_upstream,
     infer_category,
     load_registry,
@@ -70,7 +71,7 @@ SKIP_FILENAMES = {"readme.md", "index.md", "license", "license.md", "__init__.py
 
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _JINJA_VAR_RE = re.compile(r"params\.([a-zA-Z_][a-zA-Z0-9_]{0,63})")
-_FENCED_BLOCK_RE = re.compile(r"```(?:markdown|text|)?\s*\n(.*?)```", re.DOTALL)
+_FENCED_BLOCK_RE = re.compile(r"```[a-zA-Z]*\s*\n(.*?)```", re.DOTALL)
 
 
 def _parse_front_matter(text: str) -> tuple[dict[str, str], str]:
@@ -222,19 +223,6 @@ def import_templates(upstream: Path, src_meta: dict) -> list[dict]:
     return records
 
 
-def _dedupe_ids(records: list[dict]) -> list[dict]:
-    seen: dict[str, int] = {}
-    out: list[dict] = []
-    for r in records:
-        base = r["id"]
-        n = seen.get(base, 0) + 1
-        seen[base] = n
-        if n > 1:
-            r = {**r, "id": f"{base}-{n}"}
-        out.append(r)
-    return out
-
-
 def main() -> int:
     registry = load_registry()
     src_meta = next(s for s in registry["sources"] if s["key"] == SOURCE_KEY)
@@ -246,7 +234,7 @@ def main() -> int:
     template_records = import_templates(upstream, src_meta)
     log(f"Parsed {len(template_records)} template records")
 
-    all_records = _dedupe_ids(prompt_records + template_records)
+    all_records = dedupe_ids(prompt_records + template_records)
     log(f"Total: {len(all_records)} records from {SOURCE_KEY}")
 
     counts = merge_into_prompts_dir(all_records)

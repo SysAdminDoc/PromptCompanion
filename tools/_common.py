@@ -416,6 +416,20 @@ def infer_category(title: str, body: str, default: str = "roleplay") -> str:
     return default
 
 
+def dedupe_ids(records: list[dict]) -> list[dict]:
+    """Suffix duplicate IDs with -2, -3, etc. to make them unique."""
+    seen: dict[str, int] = {}
+    out: list[dict] = []
+    for r in records:
+        base = r["id"]
+        n = seen.get(base, 0) + 1
+        seen[base] = n
+        if n > 1:
+            r = {**r, "id": f"{base}-{n}"}
+        out.append(r)
+    return out
+
+
 def ensure_upstream(source_key: str) -> Path:
     """Return path to cloned upstream repo, erroring if missing."""
     registry = load_registry()

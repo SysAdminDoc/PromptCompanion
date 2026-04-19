@@ -1056,6 +1056,11 @@ class MainWindow(QMainWindow):
             self._hotkey_thread.start()
 
     def _setup_tray(self):
+        self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+        if not self._tray_available:
+            self.tray = None
+            return
+
         self.tray = QSystemTrayIcon(self)
         if LOGO_PATH.exists():
             self.tray.setIcon(QIcon(str(LOGO_PATH)))
@@ -1088,7 +1093,8 @@ class MainWindow(QMainWindow):
     def _quit_app(self):
         if self._hotkey_thread:
             self._hotkey_thread.stop()
-        self.tray.hide()
+        if self.tray:
+            self.tray.hide()
         self.db.close()
         QApplication.quit()
 
@@ -1162,6 +1168,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("  ".join(parts), 5000)
 
     def closeEvent(self, event):
+        if not self._tray_available:
+            # No system tray — close normally
+            self._quit_app()
+            event.accept()
+            return
         event.ignore()
         self.hide()
         self.tray.showMessage(

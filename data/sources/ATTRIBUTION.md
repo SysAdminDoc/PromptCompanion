@@ -39,6 +39,17 @@ Only sources under CC0-1.0 or MIT licenses are bundled.
 
 > MIT License. See upstream repository for full text.
 
+## abilzerian/LLM-Prompt-Library
+
+- **Repo**: https://github.com/abilzerian/LLM-Prompt-Library
+- **Author**: abilzerian (Alexander Bilzerian)
+- **License**: MIT
+- **Imported via**: `tools/import_llmprompt.py`
+- **Default category**: `system`
+- **Format**: Markdown prompts (`prompts/`) + Jinja2 templates (`templates/`)
+
+> MIT License. See upstream repository for full text.
+
 ---
 
 If you are an upstream author and would like a change to attribution, crediting,

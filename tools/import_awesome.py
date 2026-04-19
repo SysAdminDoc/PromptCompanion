@@ -17,6 +17,7 @@ csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (
     build_record,
+    dedupe_ids,
     ensure_upstream,
     infer_category,
     load_registry,
@@ -34,7 +35,7 @@ def _coerce_for_devs(raw: str) -> bool:
 
 def parse_csv(csv_path: Path, src_meta: dict) -> list[dict]:
     records: list[dict] = []
-    with csv_path.open("r", encoding="utf-8", newline="") as fh:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         for row in reader:
             title = (row.get("act") or "").strip()
@@ -65,19 +66,6 @@ def parse_csv(csv_path: Path, src_meta: dict) -> list[dict]:
     return records
 
 
-def _dedupe_ids(records: list[dict]) -> list[dict]:
-    seen: dict[str, int] = {}
-    out: list[dict] = []
-    for r in records:
-        base = r["id"]
-        n = seen.get(base, 0) + 1
-        seen[base] = n
-        if n > 1:
-            r = {**r, "id": f"{base}-{n}"}
-        out.append(r)
-    return out
-
-
 def main() -> int:
     registry = load_registry()
     src_meta = next(s for s in registry["sources"] if s["key"] == SOURCE_KEY)
@@ -87,7 +75,7 @@ def main() -> int:
         raise SystemExit(f"Missing CSV: {csv_path}")
 
     log(f"Parsing {csv_path}")
-    records = _dedupe_ids(parse_csv(csv_path, src_meta))
+    records = dedupe_ids(parse_csv(csv_path, src_meta))
     log(f"Parsed {len(records)} records from {SOURCE_KEY}")
 
     counts = merge_into_prompts_dir(records)
