@@ -4,6 +4,25 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-18
+
+Premium UX/UI polish pass.
+
+### Improved
+- **Welcome state**: centered empty-state guidance when no prompt is selected, with contextual "No prompts found" when search returns zero results.
+- **Prompt list**: reduced from 5 columns to 3 (Score, Title, Category) so titles are fully readable. Category column shows subdued text. Titles have tooltips for overflow.
+- **Preview pane**: quality displayed as a colored pill badge with tooltip (e.g., "High quality (82/100)"). Meta separator changed from dots to slashes. Tags rendered as inline styled HTML spans. Variable labels humanized ("max_tokens_out" becomes "Max Tokens Out"). Body displayed in a card-like container with border and rounded corners.
+- **Action bar**: clearer hierarchy — Copy (secondary), Copy Filled (primary/lavender), Paste to App (accent/teal). All buttons disabled when no prompt is selected. Export format combo has tooltip. Copy feedback changes button color to green briefly.
+- **Search bar**: placeholder shows actual prompt count ("Search 3,751 prompts..."). Built-in clear button enabled. Rounded corners increased. Focus ring on lavender.
+- **Toolbar**: consistent naming — "Any Role", "Any Score", "Any Source". All combos have tooltips. Better spacing with visual gaps between groups.
+- **Category tree**: formatted counts with commas. No alternating row colors for cleaner look.
+- **Stylesheet**: comprehensive overhaul — transparent input borders (appear on hover/focus), refined scrollbars (6px, transparent track), 1px splitter, tooltip styling, better button disabled states, better combo hover states, body editor card styling, refined table header (no uppercase, letter-spacing), semi-transparent hover states.
+- **Status bar**: shows total with source count on startup. Contextual messages with timeout. Tray balloon message adapts to platform.
+- **Tray menu**: separator between Show and Quit. "Show PromptCompanion" label.
+- **Window**: slightly larger default (1300x800). Search debounce reduced to 200ms.
+
+---
+
 ## [0.3.0] - 2026-04-18
 
 Paste flow — system tray, global hotkey, paste-to-active-window, export profiles.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.3.0 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.3.1 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search. Catppuccin Mocha dark theme. One-click copy.
@@ -33,13 +33,14 @@ def _bootstrap(packages: list[str]) -> None:
 
 _bootstrap(["PyQt6"])
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QSize
 from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QIcon, QAction
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QSplitter,
     QTreeView, QTableView, QVBoxLayout, QWidget, QAbstractItemView,
-    QFormLayout, QFrame, QGroupBox, QSystemTrayIcon, QMenu,
+    QFormLayout, QFrame, QGroupBox, QSystemTrayIcon, QMenu, QStackedWidget,
+    QSizePolicy,
 )
 
 
@@ -48,7 +49,7 @@ ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "index" / "prompts.db"
 LOGO_PATH = ROOT / "logo.png"
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 # ── Catppuccin Mocha ───────────────────────────────────────────────
 C = {
@@ -63,95 +64,152 @@ C = {
 }
 
 STYLESHEET = f"""
+/* ── Base ────────────────────────────────────────────────────── */
 QMainWindow, QWidget {{
     background-color: {C['base']};
     color: {C['text']};
-    font-family: "Segoe UI", "Inter", sans-serif;
+    font-family: "Segoe UI", "Inter", -apple-system, sans-serif;
     font-size: 13px;
 }}
-QLineEdit, QComboBox, QPlainTextEdit {{
+
+/* ── Inputs ──────────────────────────────────────────────────── */
+QLineEdit {{
     background-color: {C['surface0']};
     color: {C['text']};
-    border: 1px solid {C['surface1']};
-    border-radius: 6px;
-    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 7px 12px;
     selection-background-color: {C['lavender']};
     selection-color: {C['crust']};
 }}
-QLineEdit:focus, QComboBox:focus {{
+QLineEdit:focus {{
+    border: 1px solid {C['lavender']};
+    background-color: {C['surface0']};
+}}
+QLineEdit#searchInput {{
+    background-color: {C['surface0']};
+    padding: 8px 14px 8px 14px;
+    font-size: 13px;
+    border-radius: 10px;
+}}
+QLineEdit#searchInput:focus {{
+    border: 1px solid {C['lavender']};
+}}
+
+/* ── Combos ──────────────────────────────────────────────────── */
+QComboBox {{
+    background-color: {C['surface0']};
+    color: {C['subtext1']};
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 6px 28px 6px 10px;
+    font-size: 12px;
+}}
+QComboBox:hover {{
+    border: 1px solid {C['surface2']};
+}}
+QComboBox:focus {{
     border: 1px solid {C['lavender']};
 }}
 QComboBox::drop-down {{
     border: none;
-    padding-right: 8px;
+    width: 20px;
 }}
 QComboBox::down-arrow {{
     image: none;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
-    border-top: 5px solid {C['subtext0']};
-    margin-right: 6px;
+    border-top: 4px solid {C['overlay0']};
+    margin-right: 8px;
 }}
 QComboBox QAbstractItemView {{
     background-color: {C['surface0']};
     color: {C['text']};
     border: 1px solid {C['surface1']};
+    border-radius: 8px;
+    padding: 4px;
     selection-background-color: {C['surface1']};
     selection-color: {C['lavender']};
     outline: none;
 }}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
 QPushButton {{
     background-color: {C['surface0']};
-    color: {C['text']};
-    border: 1px solid {C['surface1']};
-    border-radius: 6px;
-    padding: 6px 16px;
+    color: {C['subtext1']};
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 7px 18px;
     font-weight: 500;
+    font-size: 12px;
 }}
 QPushButton:hover {{
     background-color: {C['surface1']};
-    border-color: {C['lavender']};
+    color: {C['text']};
 }}
 QPushButton:pressed {{
     background-color: {C['surface2']};
 }}
-QPushButton#copyBtn {{
+QPushButton:disabled {{
+    background-color: {C['surface0']};
+    color: {C['overlay0']};
+}}
+QPushButton#primaryBtn {{
     background-color: {C['lavender']};
     color: {C['crust']};
     border: none;
     font-weight: 600;
-    padding: 8px 24px;
+    padding: 8px 22px;
 }}
-QPushButton#copyBtn:hover {{
+QPushButton#primaryBtn:hover {{
     background-color: {C['blue']};
 }}
-QPushButton#pasteBtn {{
+QPushButton#primaryBtn:disabled {{
+    background-color: {C['surface1']};
+    color: {C['overlay0']};
+}}
+QPushButton#accentBtn {{
     background-color: {C['teal']};
     color: {C['crust']};
     border: none;
     font-weight: 600;
-    padding: 8px 20px;
+    padding: 8px 22px;
 }}
-QPushButton#pasteBtn:hover {{
+QPushButton#accentBtn:hover {{
     background-color: {C['green']};
 }}
+QPushButton#accentBtn:disabled {{
+    background-color: {C['surface1']};
+    color: {C['overlay0']};
+}}
+QPushButton#successBtn {{
+    background-color: {C['green']};
+    color: {C['crust']};
+    border: none;
+    font-weight: 600;
+}}
+
+/* ── Tree & Table ────────────────────────────────────────────── */
 QTreeView, QTableView {{
     background-color: {C['mantle']};
     color: {C['text']};
     border: none;
     outline: none;
     alternate-background-color: {C['crust']};
-    gridline-color: {C['surface0']};
 }}
-QTreeView::item, QTableView::item {{
-    padding: 4px 6px;
+QTreeView::item {{
+    padding: 6px 12px;
+    border-radius: 0px;
+}}
+QTableView::item {{
+    padding: 5px 8px;
 }}
 QTreeView::item:selected, QTableView::item:selected {{
     background-color: {C['surface0']};
     color: {C['lavender']};
 }}
 QTreeView::item:hover, QTableView::item:hover {{
-    background-color: {C['surface0']};
+    background-color: rgba(49, 50, 68, 0.5);
 }}
 QTreeView::branch {{
     background-color: {C['mantle']};
@@ -161,118 +219,141 @@ QTreeView::branch:selected {{
 }}
 QHeaderView::section {{
     background-color: {C['crust']};
-    color: {C['subtext0']};
+    color: {C['overlay0']};
     border: none;
-    border-right: 1px solid {C['surface0']};
-    padding: 5px 8px;
+    border-bottom: 1px solid {C['surface0']};
+    padding: 6px 8px;
     font-weight: 600;
     font-size: 11px;
-    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }}
+
+/* ── Scrollbars ──────────────────────────────────────────────── */
 QScrollBar:vertical {{
-    background: {C['mantle']};
-    width: 8px;
-    border: none;
+    background: transparent;
+    width: 6px;
+    margin: 2px;
 }}
 QScrollBar::handle:vertical {{
     background: {C['surface1']};
-    border-radius: 4px;
-    min-height: 30px;
+    border-radius: 3px;
+    min-height: 40px;
 }}
 QScrollBar::handle:vertical:hover {{
     background: {C['surface2']};
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-    background: none;
-    border: none;
     height: 0px;
 }}
 QScrollBar:horizontal {{
-    background: {C['mantle']};
-    height: 8px;
-    border: none;
+    background: transparent;
+    height: 6px;
+    margin: 2px;
 }}
 QScrollBar::handle:horizontal {{
     background: {C['surface1']};
-    border-radius: 4px;
-    min-width: 30px;
+    border-radius: 3px;
+    min-width: 40px;
 }}
 QScrollBar::handle:horizontal:hover {{
     background: {C['surface2']};
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
-    background: none;
-    border: none;
     width: 0px;
 }}
+
+/* ── Splitter ────────────────────────────────────────────────── */
 QSplitter::handle {{
-    background-color: {C['surface0']};
-    width: 2px;
+    background-color: {C['crust']};
+    width: 1px;
 }}
+
+/* ── Status bar ──────────────────────────────────────────────── */
 QStatusBar {{
     background-color: {C['crust']};
-    color: {C['subtext0']};
+    color: {C['overlay0']};
     font-size: 11px;
+    padding: 2px 8px;
 }}
-QGroupBox {{
-    color: {C['subtext0']};
+
+/* ── Body editor ─────────────────────────────────────────────── */
+QPlainTextEdit#bodyEditor {{
+    background-color: {C['mantle']};
+    color: {C['subtext1']};
     border: 1px solid {C['surface0']};
-    border-radius: 6px;
-    margin-top: 12px;
-    padding-top: 16px;
+    border-radius: 8px;
+    padding: 12px;
+    selection-background-color: {C['lavender']};
+    selection-color: {C['crust']};
+}}
+
+/* ── Groups ──────────────────────────────────────────────────── */
+QGroupBox {{
+    color: {C['overlay0']};
+    border: 1px solid {C['surface0']};
+    border-radius: 8px;
+    margin-top: 14px;
+    padding: 20px 12px 12px 12px;
     font-weight: 600;
     font-size: 11px;
+    letter-spacing: 0.3px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 2px 8px;
+    padding: 2px 10px;
 }}
-QLabel#sectionLabel {{
-    color: {C['subtext0']};
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    padding-bottom: 2px;
-}}
+
+/* ── Labels ──────────────────────────────────────────────────── */
 QLabel#titleLabel {{
-    color: {C['lavender']};
-    font-size: 18px;
+    color: {C['text']};
+    font-size: 17px;
     font-weight: 700;
+    letter-spacing: -0.2px;
 }}
 QLabel#metaLabel {{
     color: {C['overlay1']};
     font-size: 11px;
+    letter-spacing: 0.2px;
 }}
-QLabel#tagLabel {{
+QLabel#tagPill {{
     background-color: {C['surface0']};
-    color: {C['subtext1']};
+    color: {C['subtext0']};
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 11px;
 }}
-QLabel#qualityHigh {{
-    color: {C['green']};
+QLabel#qualityPill {{
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
     font-weight: 700;
 }}
-QLabel#qualityMid {{
-    color: {C['yellow']};
-    font-weight: 700;
+QLabel#emptyTitle {{
+    color: {C['overlay1']};
+    font-size: 15px;
+    font-weight: 600;
 }}
-QLabel#qualityLow {{
+QLabel#emptySubtitle {{
     color: {C['overlay0']};
-    font-weight: 700;
+    font-size: 12px;
 }}
+
+/* ── Divider ─────────────────────────────────────────────────── */
 QFrame#divider {{
     background-color: {C['surface0']};
     max-height: 1px;
+    margin: 4px 0px;
 }}
+
+/* ── Menus ────────────────────────────────────────────────────── */
 QMenu {{
     background-color: {C['surface0']};
     color: {C['text']};
     border: 1px solid {C['surface1']};
+    border-radius: 8px;
     padding: 4px;
 }}
 QMenu::item {{
@@ -282,6 +363,21 @@ QMenu::item {{
 QMenu::item:selected {{
     background-color: {C['surface1']};
     color: {C['lavender']};
+}}
+QMenu::separator {{
+    height: 1px;
+    background: {C['surface1']};
+    margin: 4px 8px;
+}}
+
+/* ── Tooltips ────────────────────────────────────────────────── */
+QToolTip {{
+    background-color: {C['surface0']};
+    color: {C['text']};
+    border: 1px solid {C['surface1']};
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
 }}
 """
 
@@ -318,7 +414,6 @@ if IS_WIN:
         _fields_ = [("type", ctypes.wintypes.DWORD), ("_input", _INPUT)]
 
     def _send_ctrl_v():
-        """Simulate Ctrl+V keypress."""
         inputs = (INPUT * 4)()
         for i, (vk, flags) in enumerate([
             (VK_CONTROL, 0), (VK_V, 0),
@@ -330,7 +425,6 @@ if IS_WIN:
         user32.SendInput(4, ctypes.pointer(inputs[0]), ctypes.sizeof(INPUT))
 
 
-# ── Global hotkey listener thread (Windows) ───────────────────────
 class HotkeyThread(QThread):
     triggered = pyqtSignal()
 
@@ -379,14 +473,12 @@ class PromptDB:
                min_quality: int = 0, source: str = "", limit: int = 500) -> list[dict]:
         conditions: list[str] = []
         params: list = []
-
         if query.strip():
             conditions.append("p.rowid IN (SELECT rowid FROM prompts_fts WHERE prompts_fts MATCH ?)")
             safe_q = re.sub(r'[^\w\s]', ' ', query.strip())
             terms = safe_q.split()
             fts_query = " ".join(f'"{t}"*' for t in terms if t)
             params.append(fts_query)
-
         if category:
             conditions.append("p.category = ?")
             params.append(category)
@@ -399,15 +491,13 @@ class PromptDB:
         if source:
             conditions.append("p.id LIKE ?")
             params.append(f"{source}-%")
-
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         sql = f"""
             SELECT p.rowid, p.id, p.title, p.body, p.role, p.category,
                    p.tags, p.variables, p.target_models, p.language,
                    p.source, p.author, p.license, p.version, p.quality,
                    p.created, p.updated
-            FROM prompts p
-            {where}
+            FROM prompts p {where}
             ORDER BY p.quality DESC, p.title ASC
             LIMIT ?
         """
@@ -441,12 +531,7 @@ def export_markdown(rec: dict, body: str) -> str:
     return "\n".join(lines)
 
 def export_json(rec: dict, body: str) -> str:
-    obj = {
-        "title": rec["title"],
-        "body": body,
-        "role": rec["role"],
-        "category": rec["category"],
-    }
+    obj = {"title": rec["title"], "body": body, "role": rec["role"], "category": rec["category"]}
     if rec.get("author"):
         obj["author"] = rec["author"]
     tags = json.loads(rec.get("tags", "[]")) if isinstance(rec.get("tags"), str) else rec.get("tags", [])
@@ -454,11 +539,35 @@ def export_json(rec: dict, body: str) -> str:
         obj["tags"] = tags
     return json.dumps(obj, indent=2, ensure_ascii=False)
 
-EXPORTERS = {
-    "Plain Text": export_plain,
-    "Markdown": export_markdown,
-    "JSON": export_json,
-}
+EXPORTERS = {"Plain Text": export_plain, "Markdown": export_markdown, "JSON": export_json}
+
+
+# ── Empty state ───────────────────────────────────────────────────
+class EmptyState(QWidget):
+    def __init__(self, title: str = "", subtitle: str = "", parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(8)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        t = QLabel(title)
+        t.setObjectName("emptyTitle")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setWordWrap(True)
+        layout.addWidget(t)
+        self._title = t
+
+        s = QLabel(subtitle)
+        s.setObjectName("emptySubtitle")
+        s.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        s.setWordWrap(True)
+        layout.addWidget(s)
+        self._subtitle = s
+
+    def set_text(self, title: str, subtitle: str):
+        self._title.setText(title)
+        self._subtitle.setText(subtitle)
 
 
 # ── Category tree ─────────────────────────────────────────────────
@@ -469,15 +578,16 @@ class CategoryTree(QTreeView):
         super().__init__(parent)
         self.setHeaderHidden(True)
         self.setRootIsDecorated(False)
-        self.setFixedWidth(200)
-        self.setAlternatingRowColors(True)
+        self.setFixedWidth(210)
+        self.setAlternatingRowColors(False)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._model = QStandardItemModel()
         self.setModel(self._model)
         self.clicked.connect(self._on_click)
 
     def load(self, categories: list[tuple[str, int]], total: int):
         self._model.clear()
-        all_item = QStandardItem(f"All Prompts  ({total})")
+        all_item = QStandardItem(f"All Prompts ({total:,})")
         all_item.setData("", Qt.ItemDataRole.UserRole)
         all_item.setEditable(False)
         font = all_item.font()
@@ -487,9 +597,10 @@ class CategoryTree(QTreeView):
 
         for cat, count in categories:
             label = cat.replace("_", " ").title()
-            item = QStandardItem(f"{label}  ({count})")
+            item = QStandardItem(f"{label} ({count:,})")
             item.setData(cat, Qt.ItemDataRole.UserRole)
             item.setEditable(False)
+            item.setForeground(QColor(C["subtext1"]))
             self._model.appendRow(item)
 
         self.setCurrentIndex(self._model.index(0, 0))
@@ -507,21 +618,21 @@ class PromptTable(QTableView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._model = QStandardItemModel()
-        self._model.setHorizontalHeaderLabels(["Q", "Title", "Category", "Role", "Source"])
+        self._model.setHorizontalHeaderLabels(["Score", "Title", "Category"])
         self.setModel(self._model)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
-        self.horizontalHeader().setStretchLastSection(True)
-        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.setColumnWidth(0, 36)
-        self.setColumnWidth(2, 110)
-        self.setColumnWidth(3, 60)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        hdr = self.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(0, 48)
+        self.setColumnWidth(2, 100)
         self.selectionModel().currentRowChanged.connect(self._on_row)
         self._data: list[dict] = []
 
@@ -529,9 +640,9 @@ class PromptTable(QTableView):
         self._model.removeRows(0, self._model.rowCount())
         self._data = records
         for rec in records:
-            q_item = QStandardItem(str(rec.get("quality", 0)))
-            q_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             q = rec.get("quality", 0)
+            q_item = QStandardItem(str(q))
+            q_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if q >= 60:
                 q_item.setForeground(QColor(C["green"]))
             elif q >= 35:
@@ -540,15 +651,14 @@ class PromptTable(QTableView):
                 q_item.setForeground(QColor(C["overlay0"]))
 
             title_item = QStandardItem(rec["title"])
+            title_item.setToolTip(rec["title"])
+
             cat_item = QStandardItem(rec["category"].replace("_", " ").title())
-            role_item = QStandardItem(rec["role"])
-            src_key = rec["id"].split("-")[0] if "-" in rec["id"] else ""
-            src_item = QStandardItem(src_key)
+            cat_item.setForeground(QColor(C["overlay1"]))
 
-            for it in (q_item, title_item, cat_item, role_item, src_item):
+            for it in (q_item, title_item, cat_item):
                 it.setEditable(False)
-
-            self._model.appendRow([q_item, title_item, cat_item, role_item, src_item])
+            self._model.appendRow([q_item, title_item, cat_item])
 
     def _on_row(self, current, _previous):
         row = current.row()
@@ -562,23 +672,69 @@ class PromptTable(QTableView):
         return None
 
 
+# ── Quality pill ──────────────────────────────────────────────────
+def _quality_pill(q: int) -> QLabel:
+    lbl = QLabel(str(q))
+    lbl.setObjectName("qualityPill")
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl.setFixedHeight(22)
+    lbl.setMinimumWidth(36)
+    if q >= 60:
+        lbl.setStyleSheet(f"background-color: rgba(166,227,161,0.15); color: {C['green']};")
+        lbl.setToolTip(f"High quality ({q}/100)")
+    elif q >= 35:
+        lbl.setStyleSheet(f"background-color: rgba(249,226,175,0.12); color: {C['yellow']};")
+        lbl.setToolTip(f"Good quality ({q}/100)")
+    else:
+        lbl.setStyleSheet(f"background-color: rgba(108,112,134,0.12); color: {C['overlay0']};")
+        lbl.setToolTip(f"Fair quality ({q}/100)")
+    return lbl
+
+
 # ── Preview pane ──────────────────────────────────────────────────
 class PreviewPane(QWidget):
-    paste_requested = pyqtSignal(str)  # emits text to paste
+    paste_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current: dict | None = None
         self._var_inputs: dict[str, QLineEdit] = {}
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(8)
 
-        # Title
-        self.title_label = QLabel("Select a prompt")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Stacked: empty state (0) / content (1)
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack, stretch=1)
+
+        # ── Empty state ───────────────────────────────────────────
+        self.empty = EmptyState(
+            "Select a prompt",
+            "Browse the list or search to find a prompt.\nThe full preview will appear here.",
+        )
+        self.stack.addWidget(self.empty)
+
+        # ── Content pane ──────────────────────────────────────────
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(20, 16, 20, 12)
+        layout.setSpacing(6)
+
+        # Header row: title + quality pill
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        self.title_label = QLabel("")
         self.title_label.setObjectName("titleLabel")
         self.title_label.setWordWrap(True)
-        layout.addWidget(self.title_label)
+        self.title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        header.addWidget(self.title_label)
+        self.quality_pill_container = QWidget()
+        qpc_layout = QHBoxLayout(self.quality_pill_container)
+        qpc_layout.setContentsMargins(0, 0, 0, 0)
+        qpc_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        header.addWidget(self.quality_pill_container)
+        layout.addLayout(header)
 
         # Meta line
         self.meta_label = QLabel("")
@@ -586,13 +742,13 @@ class PreviewPane(QWidget):
         self.meta_label.setWordWrap(True)
         layout.addWidget(self.meta_label)
 
-        # Tags row
-        self.tags_widget = QWidget()
-        self.tags_layout = QHBoxLayout(self.tags_widget)
-        self.tags_layout.setContentsMargins(0, 0, 0, 0)
-        self.tags_layout.setSpacing(4)
-        self.tags_layout.addStretch()
-        layout.addWidget(self.tags_widget)
+        # Tags (wrapping label)
+        self.tags_label = QLabel("")
+        self.tags_label.setWordWrap(True)
+        self.tags_label.setVisible(False)
+        layout.addWidget(self.tags_label)
+
+        layout.addSpacing(4)
 
         # Divider
         div = QFrame()
@@ -600,87 +756,111 @@ class PreviewPane(QWidget):
         div.setFrameShape(QFrame.Shape.HLine)
         layout.addWidget(div)
 
+        layout.addSpacing(2)
+
         # Body
         self.body_text = QPlainTextEdit()
+        self.body_text.setObjectName("bodyEditor")
         self.body_text.setReadOnly(True)
         self.body_text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        font = QFont("Consolas", 12)
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        self.body_text.setFont(font)
+        body_font = QFont("Cascadia Code", 11)
+        body_font.setStyleHint(QFont.StyleHint.Monospace)
+        self.body_text.setFont(body_font)
         layout.addWidget(self.body_text, stretch=1)
 
-        # Variables group
-        self.vars_group = QGroupBox("Variables")
+        # Variables
+        self.vars_group = QGroupBox("Template Variables")
         self.vars_layout = QFormLayout(self.vars_group)
+        self.vars_layout.setContentsMargins(12, 8, 12, 8)
+        self.vars_layout.setSpacing(6)
         self.vars_group.setVisible(False)
         layout.addWidget(self.vars_group)
 
-        # Bottom bar
-        bottom = QHBoxLayout()
-        bottom.setSpacing(8)
+        layout.addSpacing(4)
 
-        self.quality_display = QLabel("")
-        self.quality_display.setFixedWidth(60)
-        bottom.addWidget(self.quality_display)
+        # ── Action bar ────────────────────────────────────────────
+        action_bar = QHBoxLayout()
+        action_bar.setSpacing(8)
 
-        # Export format selector
+        # Left: export format
         self.export_combo = QComboBox()
         self.export_combo.addItems(list(EXPORTERS.keys()))
         self.export_combo.setFixedWidth(110)
-        bottom.addWidget(self.export_combo)
+        self.export_combo.setToolTip("Export format for copy and paste")
+        action_bar.addWidget(self.export_combo)
 
-        bottom.addStretch()
+        action_bar.addStretch()
 
-        self.copy_raw_btn = QPushButton("Copy")
-        self.copy_raw_btn.clicked.connect(self._copy_exported)
-        bottom.addWidget(self.copy_raw_btn)
+        # Right: action buttons
+        self.copy_btn = QPushButton("Copy")
+        self.copy_btn.setToolTip("Copy prompt to clipboard")
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self._copy_exported)
+        action_bar.addWidget(self.copy_btn)
 
-        self.copy_btn = QPushButton("Copy Filled")
-        self.copy_btn.setObjectName("copyBtn")
-        self.copy_btn.clicked.connect(self._copy_filled)
-        bottom.addWidget(self.copy_btn)
+        self.copy_filled_btn = QPushButton("Copy Filled")
+        self.copy_filled_btn.setObjectName("primaryBtn")
+        self.copy_filled_btn.setToolTip("Copy with variables filled in")
+        self.copy_filled_btn.setVisible(False)
+        self.copy_filled_btn.clicked.connect(self._copy_filled)
+        action_bar.addWidget(self.copy_filled_btn)
 
         if IS_WIN:
-            self.paste_btn = QPushButton("Paste to Window")
-            self.paste_btn.setObjectName("pasteBtn")
+            self.paste_btn = QPushButton("Paste to App")
+            self.paste_btn.setObjectName("accentBtn")
+            self.paste_btn.setToolTip("Paste into the previously active window")
+            self.paste_btn.setEnabled(False)
             self.paste_btn.clicked.connect(self._paste_to_window)
-            bottom.addWidget(self.paste_btn)
+            action_bar.addWidget(self.paste_btn)
 
-        layout.addLayout(bottom)
+        layout.addLayout(action_bar)
+        self.stack.addWidget(content)
 
     def show_prompt(self, rec: dict):
         self._current = rec
+        self.stack.setCurrentIndex(1)
+        self.copy_btn.setEnabled(True)
+        if IS_WIN and hasattr(self, "paste_btn"):
+            self.paste_btn.setEnabled(True)
+
+        # Title
         self.title_label.setText(rec["title"])
 
+        # Quality pill
+        qpc = self.quality_pill_container.layout()
+        while qpc.count():
+            child = qpc.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        qpc.addWidget(_quality_pill(rec.get("quality", 0)))
+
+        # Meta
         parts = []
         if rec.get("author"):
-            parts.append(f"by {rec['author']}")
+            parts.append(rec["author"])
         parts.append(rec["role"])
         parts.append(rec["license"])
         parts.append(rec["category"])
-        self.meta_label.setText("  ·  ".join(parts))
+        self.meta_label.setText("  /  ".join(parts))
 
-        while self.tags_layout.count() > 1:
-            child = self.tags_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+        # Tags as inline styled text
         tags = json.loads(rec.get("tags", "[]")) if isinstance(rec.get("tags"), str) else rec.get("tags", [])
-        for tag in tags[:8]:
-            lbl = QLabel(tag)
-            lbl.setObjectName("tagLabel")
-            self.tags_layout.insertWidget(self.tags_layout.count() - 1, lbl)
+        if tags:
+            spans = []
+            for tag in tags[:10]:
+                spans.append(
+                    f'<span style="background-color:{C["surface0"]}; color:{C["subtext0"]}; '
+                    f'border-radius:3px; padding:1px 6px; font-size:11px; margin-right:4px;">{tag}</span>'
+                )
+            self.tags_label.setText("  ".join(spans))
+            self.tags_label.setVisible(True)
+        else:
+            self.tags_label.setVisible(False)
 
+        # Body
         self.body_text.setPlainText(rec["body"])
 
-        q = rec.get("quality", 0)
-        self.quality_display.setText(f"Q: {q}")
-        if q >= 60:
-            self.quality_display.setStyleSheet(f"color: {C['green']}; font-weight: 700; font-size: 13px;")
-        elif q >= 35:
-            self.quality_display.setStyleSheet(f"color: {C['yellow']}; font-weight: 700; font-size: 13px;")
-        else:
-            self.quality_display.setStyleSheet(f"color: {C['overlay0']}; font-weight: 700; font-size: 13px;")
-
+        # Variables
         self._var_inputs.clear()
         while self.vars_layout.rowCount() > 0:
             self.vars_layout.removeRow(0)
@@ -690,15 +870,30 @@ class PreviewPane(QWidget):
             self.vars_group.setVisible(True)
             for var in variables:
                 name = var.get("name", "")
+                display = name.replace("_", " ").title()
                 inp = QLineEdit()
                 inp.setPlaceholderText(var.get("default", name))
                 inp.textChanged.connect(self._update_preview)
                 self._var_inputs[name] = inp
-                self.vars_layout.addRow(name, inp)
-            self.copy_btn.setVisible(True)
+                label = QLabel(display)
+                label.setStyleSheet(f"color: {C['subtext0']}; font-size: 12px;")
+                self.vars_layout.addRow(label, inp)
+            self.copy_filled_btn.setVisible(True)
         else:
             self.vars_group.setVisible(False)
-            self.copy_btn.setVisible(False)
+            self.copy_filled_btn.setVisible(False)
+
+    def show_no_results(self):
+        self._current = None
+        self.copy_btn.setEnabled(False)
+        if IS_WIN and hasattr(self, "paste_btn"):
+            self.paste_btn.setEnabled(False)
+        self.empty.set_text("No prompts found", "Try a different search term or clear your filters.")
+        self.stack.setCurrentIndex(0)
+
+    def show_welcome(self):
+        self.empty.set_text("Select a prompt", "Browse the list or search to find a prompt.\nThe full preview will appear here.")
+        self.stack.setCurrentIndex(0)
 
     def _get_filled_body(self) -> str:
         if not self._current:
@@ -714,30 +909,34 @@ class PreviewPane(QWidget):
         if not self._current:
             return body
         fmt = self.export_combo.currentText()
-        exporter = EXPORTERS.get(fmt, export_plain)
-        return exporter(self._current, body)
+        return EXPORTERS.get(fmt, export_plain)(self._current, body)
 
     def _update_preview(self):
         if self._current:
             self.body_text.setPlainText(self._get_filled_body())
 
+    def _flash_button(self, btn: QPushButton, original_text: str):
+        btn.setObjectName("successBtn")
+        btn.setStyle(btn.style())
+        btn.setText("Copied")
+        def _reset():
+            btn.setObjectName("primaryBtn" if original_text == "Copy Filled" else "")
+            btn.setStyle(btn.style())
+            btn.setText(original_text)
+        QTimer.singleShot(1200, _reset)
+
     def _copy_exported(self):
         if self._current:
-            text = self._get_export_text(self._current["body"])
-            QApplication.clipboard().setText(text)
-            self.copy_raw_btn.setText("Copied!")
-            QTimer.singleShot(1500, lambda: self.copy_raw_btn.setText("Copy"))
+            QApplication.clipboard().setText(self._get_export_text(self._current["body"]))
+            self._flash_button(self.copy_btn, "Copy")
 
     def _copy_filled(self):
-        text = self._get_export_text(self._get_filled_body())
-        QApplication.clipboard().setText(text)
-        self.copy_btn.setText("Copied!")
-        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy Filled"))
+        QApplication.clipboard().setText(self._get_export_text(self._get_filled_body()))
+        self._flash_button(self.copy_filled_btn, "Copy Filled")
 
     def _paste_to_window(self):
         body = self._get_filled_body() if self._var_inputs else (self._current["body"] if self._current else "")
-        text = self._get_export_text(body)
-        self.paste_requested.emit(text)
+        self.paste_requested.emit(self._get_export_text(body))
 
 
 # ── Main window ───────────────────────────────────────────────────
@@ -745,7 +944,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"PromptCompanion v{VERSION}")
-        self.resize(1280, 780)
+        self.resize(1300, 800)
         self._prev_hwnd = None
         self._hotkey_thread = None
 
@@ -753,6 +952,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(LOGO_PATH)))
 
         self.db = PromptDB(DB_PATH)
+        self._total = self.db.total_count()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -762,43 +962,53 @@ class MainWindow(QMainWindow):
 
         # ── Toolbar ────────────────────────────────────────────────
         toolbar = QWidget()
-        toolbar.setStyleSheet(f"background-color: {C['crust']}; padding: 6px 12px;")
+        toolbar.setStyleSheet(f"background-color: {C['crust']};")
         tb_layout = QHBoxLayout(toolbar)
-        tb_layout.setContentsMargins(12, 8, 12, 8)
-        tb_layout.setSpacing(10)
+        tb_layout.setContentsMargins(14, 10, 14, 10)
+        tb_layout.setSpacing(8)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search prompts (FTS5)...")
-        self.search_input.setMinimumWidth(280)
+        self.search_input.setObjectName("searchInput")
+        self.search_input.setPlaceholderText(f"Search {self._total:,} prompts...")
+        self.search_input.setMinimumWidth(300)
+        self.search_input.setClearButtonEnabled(True)
         tb_layout.addWidget(self.search_input, stretch=1)
 
+        tb_layout.addSpacing(4)
+
         self.role_combo = QComboBox()
-        self.role_combo.addItems(["All Roles", "system", "user", "assistant"])
-        self.role_combo.setFixedWidth(110)
+        self.role_combo.addItems(["Any Role", "system", "user", "assistant"])
+        self.role_combo.setFixedWidth(105)
+        self.role_combo.setToolTip("Filter by prompt role")
         tb_layout.addWidget(self.role_combo)
 
         self.quality_combo = QComboBox()
-        self.quality_combo.addItems(["Any Quality", "60+ (High)", "40+ (Mid)", "20+ (Low)"])
-        self.quality_combo.setFixedWidth(120)
+        self.quality_combo.addItems(["Any Score", "High (60+)", "Good (40+)", "Fair (20+)"])
+        self.quality_combo.setFixedWidth(115)
+        self.quality_combo.setToolTip("Filter by quality score")
         tb_layout.addWidget(self.quality_combo)
 
         self.source_combo = QComboBox()
-        self.source_combo.addItem("All Sources")
+        self.source_combo.addItem("Any Source")
         for src in self.db.sources():
             self.source_combo.addItem(src)
         self.source_combo.setFixedWidth(120)
+        self.source_combo.setToolTip("Filter by upstream source")
         tb_layout.addWidget(self.source_combo)
 
+        tb_layout.addSpacing(4)
+
         self.count_label = QLabel("")
-        self.count_label.setStyleSheet(f"color: {C['overlay1']}; font-size: 11px;")
-        self.count_label.setFixedWidth(100)
+        self.count_label.setStyleSheet(f"color: {C['overlay0']}; font-size: 11px;")
         self.count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.count_label.setMinimumWidth(80)
         tb_layout.addWidget(self.count_label)
 
         main_layout.addWidget(toolbar)
 
         # ── Three-pane splitter ────────────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(1)
 
         self.cat_tree = CategoryTree()
         splitter.addWidget(self.cat_tree)
@@ -813,20 +1023,22 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.preview)
         splitter.addWidget(scroll)
 
-        splitter.setSizes([200, 420, 660])
+        splitter.setSizes([210, 400, 690])
         main_layout.addWidget(splitter, stretch=1)
 
         # ── Status bar ─────────────────────────────────────────────
-        hotkey_hint = "  |  Win+Shift+P to summon" if IS_WIN else ""
-        self.statusBar().showMessage(f"PromptCompanion v{VERSION}{hotkey_hint}")
+        hotkey = "Win+Shift+P to summon" if IS_WIN else ""
+        self.statusBar().showMessage(
+            f"{self._total:,} prompts from 4 sources" +
+            (f"   |   {hotkey}" if hotkey else "")
+        )
 
         # ── System tray ────────────────────────────────────────────
         self._setup_tray()
 
         # ── Load data ──────────────────────────────────────────────
         cats = self.db.categories()
-        total = self.db.total_count()
-        self.cat_tree.load(cats, total)
+        self.cat_tree.load(cats, self._total)
 
         # ── Connections ────────────────────────────────────────────
         self.cat_tree.category_selected.connect(self._on_filter_changed)
@@ -838,14 +1050,13 @@ class MainWindow(QMainWindow):
 
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
-        self._search_timer.setInterval(250)
+        self._search_timer.setInterval(200)
         self._search_timer.timeout.connect(self._on_filter_changed)
         self.search_input.textChanged.connect(lambda: self._search_timer.start())
 
         self._current_category = ""
         self._on_filter_changed()
 
-        # ── Global hotkey ──────────────────────────────────────────
         if IS_WIN:
             self._hotkey_thread = HotkeyThread()
             self._hotkey_thread.triggered.connect(self._on_hotkey)
@@ -860,9 +1071,10 @@ class MainWindow(QMainWindow):
         self.tray.setToolTip(f"PromptCompanion v{VERSION}")
 
         menu = QMenu()
-        show_action = QAction("Show", self)
+        show_action = QAction("Show PromptCompanion", self)
         show_action.triggered.connect(self._show_from_tray)
         menu.addAction(show_action)
+        menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(quit_action)
@@ -888,7 +1100,6 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _on_hotkey(self):
-        """Win+Shift+P pressed — remember foreground window and summon."""
         if IS_WIN:
             self._prev_hwnd = user32.GetForegroundWindow()
         if self.isMinimized() or not self.isVisible():
@@ -899,25 +1110,20 @@ class MainWindow(QMainWindow):
         self.search_input.selectAll()
 
     def _do_paste_to_window(self, text: str):
-        """Copy text to clipboard, switch to previous window, simulate Ctrl+V."""
         if not IS_WIN or not self._prev_hwnd:
             QApplication.clipboard().setText(text)
-            self.statusBar().showMessage("Copied to clipboard (no target window)")
+            self.statusBar().showMessage("Copied (no target window detected)", 3000)
             return
 
         QApplication.clipboard().setText(text)
         hwnd = self._prev_hwnd
-
-        # Minimize self, activate target
         self.showMinimized()
         QApplication.processEvents()
         time.sleep(0.15)
-
         user32.SetForegroundWindow(hwnd)
         time.sleep(0.2)
         _send_ctrl_v()
-
-        self.statusBar().showMessage("Pasted to window")
+        self.statusBar().showMessage("Pasted to previous window", 3000)
 
     def _on_filter_changed(self, *_args):
         sender = self.sender()
@@ -929,37 +1135,45 @@ class MainWindow(QMainWindow):
         category = self._current_category
 
         role_text = self.role_combo.currentText()
-        role = "" if role_text == "All Roles" else role_text
+        role = "" if role_text == "Any Role" else role_text
 
         q_text = self.quality_combo.currentText()
         min_quality = 0
-        if q_text.startswith("60"):
+        if "60" in q_text:
             min_quality = 60
-        elif q_text.startswith("40"):
+        elif "40" in q_text:
             min_quality = 40
-        elif q_text.startswith("20"):
+        elif "20" in q_text:
             min_quality = 20
 
         src_text = self.source_combo.currentText()
-        source = "" if src_text == "All Sources" else src_text
+        source = "" if src_text == "Any Source" else src_text
 
         results = self.db.search(query=query, category=category, role=role,
                                  min_quality=min_quality, source=source)
         self.prompt_table.load(results)
-        self.count_label.setText(f"{len(results)} prompts")
-        self.statusBar().showMessage(
-            f"{len(results)} prompts" +
-            (f' matching "{query}"' if query else "") +
-            (f" in {category}" if category else "")
-        )
+
+        n = len(results)
+        self.count_label.setText(f"{n:,} result{'s' if n != 1 else ''}")
+
+        if n == 0 and (query or role or min_quality or source):
+            self.preview.show_no_results()
+        elif n == 0:
+            self.preview.show_welcome()
+
+        parts = [f"{n:,} prompt{'s' if n != 1 else ''}"]
+        if query:
+            parts.append(f'for "{query}"')
+        if category:
+            parts.append(f"in {category}")
+        self.statusBar().showMessage("  ".join(parts), 5000)
 
     def closeEvent(self, event):
-        # Minimize to tray instead of quitting
         event.ignore()
         self.hide()
         self.tray.showMessage(
             "PromptCompanion",
-            "Running in tray. Win+Shift+P to summon.",
+            "Still running. " + ("Win+Shift+P to summon." if IS_WIN else "Double-click tray icon to show."),
             QSystemTrayIcon.MessageIcon.Information,
             2000,
         )
