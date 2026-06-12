@@ -1,0 +1,3 @@
+PromptCompanion prompt dataset notice
+
+The bundled prompt dataset under data/prompts/ aggregates content from multiple upstream projects. Each prompt record retains its source, author, and license fields. Original upstream licenses apply to individual records. See data/sources/ATTRIBUTION.md for the full list.
