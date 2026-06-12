@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-The bundled prompt dataset under `data/prompts/` aggregates content from
-multiple upstream projects. Each prompt record retains its `source`,
-`author`, and `license` fields. Original upstream licenses apply to
-individual records. See `data/sources/ATTRIBUTION.md` for the full list.
