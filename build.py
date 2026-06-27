@@ -33,7 +33,7 @@ def main() -> int:
         print("Database not found. Run `python tools/build_index.py` first.")
         return 1
 
-    _bootstrap(["pyinstaller", "Pillow"])
+    _bootstrap(["pyinstaller", "Pillow", "cryptography"])
 
     # Generate .ico from logo.png if it doesn't exist
     ico_path = root / "logo.ico"

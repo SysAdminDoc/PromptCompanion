@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from promptcompanion import OverlayStore, PromptDB, extract_variables
+import promptcompanion
+from promptcompanion import OverlayStore, PromptDB, extract_variables, make_private_prompt
 
 
 SCHEMA = """
@@ -155,6 +158,50 @@ class OverlayTests(unittest.TestCase):
 
             self.assertEqual([r["id"] for r in results], ["demo-one"])
             self.assertEqual(results[0]["title"], "Edited overlay title")
+
+    def test_private_prompt_is_searchable_without_base_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = tmp_path / "prompts.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(SCHEMA)
+            insert_prompt(conn, "demo-one", "Base title", "Base body")
+            conn.close()
+
+            overlay = OverlayStore(tmp_path / "overlay.jsonl")
+            private = make_private_prompt()
+            private["title"] = "Local private draft"
+            private["body"] = "privateonly body text"
+            overlay.save(private)
+
+            db = PromptDB(db_path, overlay)
+            try:
+                results = db.search(query="privateonly")
+                self.assertEqual(db.total_count(), 2)
+            finally:
+                db.close()
+
+            self.assertEqual([r["id"] for r in results], [private["id"]])
+            self.assertTrue(results[0]["private"])
+
+    @unittest.skipIf(promptcompanion.Fernet is None, "cryptography is not installed")
+    def test_private_prompt_can_be_encrypted_in_overlay_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "overlay.jsonl"
+            with patch.dict(os.environ, {"PROMPTCOMPANION_PRIVATE_PASSPHRASE": "correct horse battery staple"}):
+                store = OverlayStore(path)
+                private = make_private_prompt()
+                private["body"] = "secret private text"
+                store.save(private)
+
+                raw = path.read_text(encoding="utf-8")
+                self.assertIn('"encrypted":', raw)
+                self.assertNotIn("secret private text", raw)
+
+                reloaded = OverlayStore(path)
+                records = reloaded.private_records()
+
+            self.assertEqual(records[0]["body"], "secret private text")
 
 
 if __name__ == "__main__":

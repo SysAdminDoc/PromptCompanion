@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.6.0 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.6.1 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -13,14 +13,24 @@ import multiprocessing
 
 multiprocessing.freeze_support()
 
+import base64
+import hashlib
 import json
+import os
 import re
 import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except ImportError:  # Optional: only needed when private prompt encryption is enabled.
+    Fernet = None
+    InvalidToken = Exception
 
 IS_WIN = sys.platform == "win32"
 
@@ -69,7 +79,7 @@ USER_DIR.mkdir(parents=True, exist_ok=True)
 USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -466,11 +476,12 @@ QToolTip {{
 }}
 """
 
-VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]{0,63})\s*\}\}")
 
 # -- Special category keys -------------------------------------------------
 CAT_FAVORITES = "__favorites__"
 CAT_RECENT = "__recent__"
+CAT_PRIVATE = "__private__"
 
 
 # -- Win32 helpers ----------------------------------------------------------
@@ -527,7 +538,9 @@ PROMPT_FIELDS = (
     "target_models", "language", "source", "author", "license",
     "version", "quality", "created", "updated",
 )
-VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]{0,63})\s*\}\}")
+PROMPT_EXTRA_FIELDS = ("private",)
+PRIVATE_ENCRYPTION_ENV = "PROMPTCOMPANION_PRIVATE_PASSPHRASE"
+PRIVATE_ENCRYPTION_SCHEME = "fernet-pbkdf2-sha256-v1"
 
 
 def utc_now() -> str:
@@ -560,12 +573,70 @@ def extract_variables(body: str) -> list[dict]:
     return variables
 
 
+def make_private_prompt() -> dict:
+    now = utc_now()
+    return {
+        "id": f"private-{uuid.uuid4().hex[:16]}",
+        "title": "Untitled Private Prompt",
+        "body": "Write your private prompt here.",
+        "role": "user",
+        "category": "uncategorized",
+        "tags": ["private"],
+        "variables": [],
+        "target_models": ["any"],
+        "language": "en",
+        "source": "private://local",
+        "author": "Private",
+        "license": "Unknown",
+        "version": 1,
+        "quality": 0,
+        "created": now,
+        "updated": now,
+        "private": True,
+    }
+
+
+def _derive_private_key(passphrase: str, salt: bytes) -> bytes:
+    key = hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, 600_000, dklen=32)
+    return base64.urlsafe_b64encode(key)
+
+
+def _encrypt_private_record(record: dict, passphrase: str) -> dict:
+    if Fernet is None:
+        raise RuntimeError("cryptography is not installed")
+    salt = os.urandom(16)
+    key = _derive_private_key(passphrase, salt)
+    payload = json.dumps(record, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    token = Fernet(key).encrypt(payload)
+    return {
+        "id": record["id"],
+        "private": True,
+        "encrypted": PRIVATE_ENCRYPTION_SCHEME,
+        "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
+        "payload": token.decode("ascii"),
+    }
+
+
+def _decrypt_private_record(envelope: dict, passphrase: str) -> dict:
+    if Fernet is None:
+        raise RuntimeError("cryptography is not installed")
+    salt = base64.urlsafe_b64decode(envelope["salt"].encode("ascii"))
+    key = _derive_private_key(passphrase, salt)
+    payload = Fernet(key).decrypt(envelope["payload"].encode("ascii"))
+    return json.loads(payload.decode("utf-8"))
+
+
 class OverlayStore:
     """JSONL prompt overlay layered over immutable bundled records."""
 
     def __init__(self, path: Path):
         self.path = path
         self._records: dict[str, dict] = {}
+        self._passphrase = os.environ.get(PRIVATE_ENCRYPTION_ENV, "")
+        self.encryption_enabled = bool(self._passphrase and Fernet is not None)
+        self.encryption_warning = ""
+        if self._passphrase and Fernet is None:
+            self.encryption_warning = "Private prompt encryption requested, but cryptography is not installed."
         self.load()
 
     def load(self) -> None:
@@ -581,6 +652,16 @@ class OverlayStore:
             except json.JSONDecodeError as exc:
                 print(f"Skipping malformed overlay line {line_no}: {exc}", file=sys.stderr)
                 continue
+            if rec.get("encrypted") == PRIVATE_ENCRYPTION_SCHEME:
+                if not self._passphrase:
+                    self.encryption_warning = "Encrypted private prompts are hidden until the passphrase environment variable is set."
+                    continue
+                try:
+                    rec = _decrypt_private_record(rec, self._passphrase)
+                except (InvalidToken, KeyError, RuntimeError, ValueError) as exc:
+                    self.encryption_warning = f"Encrypted private prompt on line {line_no} could not be opened."
+                    print(f"Skipping encrypted overlay line {line_no}: {exc}", file=sys.stderr)
+                    continue
             prompt_id = rec.get("id")
             if isinstance(prompt_id, str) and prompt_id:
                 self._records[prompt_id] = self._normal_record(rec)
@@ -590,6 +671,15 @@ class OverlayStore:
 
     def ids(self) -> set[str]:
         return set(self._records)
+
+    def records(self) -> list[dict]:
+        return [dict(r) for r in self._records.values()]
+
+    def private_records(self) -> list[dict]:
+        return [dict(r) for r in self._records.values() if r.get("private")]
+
+    def private_count(self) -> int:
+        return len(self.private_records())
 
     def is_overridden(self, prompt_id: str) -> bool:
         return prompt_id in self._records
@@ -619,11 +709,15 @@ class OverlayStore:
 
     def _normal_record(self, record: dict) -> dict:
         normalized = {k: record[k] for k in PROMPT_FIELDS if k in record}
+        for key in PROMPT_EXTRA_FIELDS:
+            if key in record:
+                normalized[key] = record[key]
         normalized["tags"] = parse_json_list(normalized.get("tags"))
         normalized["variables"] = parse_json_list(normalized.get("variables"))
         normalized["target_models"] = parse_json_list(normalized.get("target_models"), ["any"])
         normalized["version"] = int(normalized.get("version") or 1)
         normalized["quality"] = int(normalized.get("quality") or 0)
+        normalized["private"] = bool(normalized.get("private"))
         return normalized
 
     def _write(self) -> None:
@@ -632,10 +726,12 @@ class OverlayStore:
             self.path.unlink(missing_ok=True)
             return
         tmp = self.path.with_suffix(".jsonl.tmp")
-        lines = [
-            json.dumps(self._records[prompt_id], ensure_ascii=False, sort_keys=True)
-            for prompt_id in sorted(self._records)
-        ]
+        lines = []
+        for prompt_id in sorted(self._records):
+            rec = self._records[prompt_id]
+            if rec.get("private") and self.encryption_enabled:
+                rec = _encrypt_private_record(rec, self._passphrase)
+            lines.append(json.dumps(rec, ensure_ascii=False, sort_keys=True))
         tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
         tmp.replace(self.path)
 
@@ -720,10 +816,14 @@ class PromptDB:
             rec = self.overlay.apply(dict(row))
             cat = rec.get("category") or "uncategorized"
             counts[cat] = counts.get(cat, 0) + 1
+        for rec in self.overlay.private_records():
+            cat = rec.get("category") or "uncategorized"
+            counts[cat] = counts.get(cat, 0) + 1
         return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
     def total_count(self) -> int:
-        return self.conn.execute("SELECT COUNT(*) FROM prompts").fetchone()[0]
+        base_count = self.conn.execute("SELECT COUNT(*) FROM prompts").fetchone()[0]
+        return base_count + (self.overlay.private_count() if self.overlay else 0)
 
     def _select_sql(self, prefix: str = "p") -> str:
         fields = [
@@ -734,7 +834,10 @@ class PromptDB:
         return ", ".join(f"{prefix}.{field}" for field in fields)
 
     def _matches_filters(self, rec: dict, category: str, role: str, min_quality: int, source: str) -> bool:
-        if category and rec.get("category") != category:
+        if category == CAT_PRIVATE:
+            if not rec.get("private"):
+                return False
+        elif category and rec.get("category") != category:
             return False
         if role and rec.get("role") != role:
             return False
@@ -764,7 +867,18 @@ class PromptDB:
 
     def _all_records(self) -> list[dict]:
         rows = self.conn.execute(f"SELECT {self._select_sql('p')} FROM prompts p").fetchall()
-        return [dict(r) for r in rows]
+        records = [dict(r) for r in rows]
+        if self.overlay:
+            records.extend(self.overlay.private_records())
+        return records
+
+    def private_records(self) -> list[dict]:
+        if not self.overlay:
+            return []
+        return sorted(
+            self.overlay.private_records(),
+            key=lambda r: (str(r.get("title", "")).casefold(), str(r.get("id", ""))),
+        )
 
     def search(self, query: str = "", category: str = "", role: str = "",
                min_quality: int = 0, source: str = "", limit: int = 500) -> list[dict]:
@@ -816,9 +930,12 @@ class PromptDB:
                 seen = {r["id"] for r in results}
                 for prompt_id in sorted(self.overlay.ids() - seen):
                     base = self._base_by_id(prompt_id)
-                    if not base:
+                    rec = self.overlay.apply(base) if base else next(
+                        (r for r in self.overlay.private_records() if r.get("id") == prompt_id),
+                        None,
+                    )
+                    if not rec:
                         continue
-                    rec = self.overlay.apply(base)
                     if self._matches_filters(rec, category, role, min_quality, source) and self._matches_query(rec, query):
                         results.append(rec)
             return results[:limit]
@@ -841,12 +958,18 @@ class PromptDB:
             f"SELECT {self._select_sql('p')} FROM prompts p WHERE id IN ({placeholders})", ids
         ).fetchall()
         records = self.overlay.apply_many([dict(r) for r in rows]) if self.overlay else [dict(r) for r in rows]
+        if self.overlay:
+            found = {r["id"] for r in records}
+            records.extend([r for r in self.overlay.private_records() if r["id"] in ids and r["id"] not in found])
         by_id = {r["id"]: r for r in records}
         return [by_id[i] for i in ids if i in by_id]
 
     def sources(self) -> list[str]:
         rows = self.conn.execute("SELECT DISTINCT substr(id, 1, instr(id, '-') - 1) AS src FROM prompts ORDER BY src").fetchall()
-        return [r["src"] for r in rows]
+        sources = [r["src"] for r in rows]
+        if self.overlay and self.overlay.private_count() and "private" not in sources:
+            sources.append("private")
+        return sources
 
 
 # -- Export formatters ------------------------------------------------------
@@ -929,7 +1052,7 @@ class CategoryTree(QTreeView):
         self.setModel(self._model)
         self.clicked.connect(self._on_click)
 
-    def load(self, categories: list[tuple[str, int]], total: int, fav_count: int = 0, recent_count: int = 0):
+    def load(self, categories: list[tuple[str, int]], total: int, fav_count: int = 0, recent_count: int = 0, private_count: int = 0):
         self._model.clear()
 
         # -- All Prompts (bold, full width)
@@ -954,6 +1077,13 @@ class CategoryTree(QTreeView):
         recent_item.setEditable(False)
         recent_item.setForeground(QColor(C["sapphire"]))
         self._model.appendRow(recent_item)
+
+        # -- Private
+        private_item = QStandardItem(f"  Private  ({private_count:,})")
+        private_item.setData(CAT_PRIVATE, Qt.ItemDataRole.UserRole)
+        private_item.setEditable(False)
+        private_item.setForeground(QColor(C["teal"]))
+        self._model.appendRow(private_item)
 
         # -- Visual separator
         sep_item = QStandardItem("")
@@ -1268,16 +1398,19 @@ class PreviewPane(QWidget):
         self._edit_mode = editing
         has_prompt = self._current is not None
         is_overlay = bool(self._current and self._current.get("_overlay"))
+        is_private = bool(self._current and self._current.get("private"))
 
         self.title_label.setVisible(not editing)
         self.title_edit.setVisible(editing)
         self.body_text.setReadOnly(not editing)
-        self.export_combo.setEnabled(not editing)
+        self.export_combo.setEnabled(not editing and not is_private)
         self.edit_btn.setVisible(not editing)
         self.edit_btn.setEnabled(has_prompt)
         self.save_edit_btn.setVisible(editing)
         self.cancel_edit_btn.setVisible(editing)
-        self.reset_overlay_btn.setVisible(not editing and is_overlay)
+        self.reset_overlay_btn.setVisible(not editing and (is_overlay or is_private))
+        self.reset_overlay_btn.setText("Delete" if is_private else "Revert")
+        self.reset_overlay_btn.setToolTip("Delete this private prompt" if is_private else "Remove this local overlay edit")
         self.copy_btn.setEnabled(has_prompt and not editing)
         self.copy_filled_btn.setEnabled(has_prompt and not editing)
         if IS_WIN and hasattr(self, "paste_btn"):
@@ -1300,11 +1433,11 @@ class PreviewPane(QWidget):
         if not self._current:
             return
         title = self.title_edit.text().strip()
-        body = self.body_text.toPlainText().strip()
+        body = self.body_text.toPlainText()
         if not title:
             self.status_requested.emit("Prompt title is required", 3000)
             return
-        if not body:
+        if not body.strip():
             self.status_requested.emit("Prompt body is required", 3000)
             return
         updated = dict(self._current)
@@ -1327,6 +1460,8 @@ class PreviewPane(QWidget):
         self.title_label.setText(rec["title"])
         self.title_edit.setText(rec["title"])
         self.overlay_badge.setVisible(bool(rec.get("_overlay")))
+        if rec.get("private"):
+            self.export_combo.setCurrentText("Plain Text")
 
         # Quality pill
         qpc = self.quality_pill_container.layout()
@@ -1421,6 +1556,8 @@ class PreviewPane(QWidget):
     def _get_export_text(self, body: str) -> str:
         if not self._current:
             return body
+        if self._current.get("private"):
+            return export_plain(self._current, body)
         return EXPORTERS.get(self.export_combo.currentText(), export_plain)(self._current, body)
 
     def _update_preview(self):
@@ -1520,6 +1657,12 @@ class MainWindow(QMainWindow):
         self.source_combo.setToolTip("Filter by upstream source")
         tb.addWidget(self.source_combo)
 
+        self.new_private_btn = QPushButton("New Private")
+        self.new_private_btn.setToolTip("Create a local-only private prompt")
+        self.new_private_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_private_btn.clicked.connect(self._new_private_prompt)
+        tb.addWidget(self.new_private_btn)
+
         tb.addSpacing(4)
 
         # Count badge
@@ -1607,7 +1750,30 @@ class MainWindow(QMainWindow):
 
     def _refresh_tree(self):
         cats = self.db.categories()
-        self.cat_tree.load(cats, self._total, self.user_db.favorite_count(), self.user_db.recent_count())
+        self._total = self.db.total_count()
+        self.cat_tree.load(
+            cats,
+            self._total,
+            self.user_db.favorite_count(),
+            self.user_db.recent_count(),
+            self.overlay.private_count(),
+        )
+        if hasattr(self, "search_input"):
+            self.search_input.setPlaceholderText(f"Search {self._total:,} prompts...   (Ctrl+K)")
+
+    def _new_private_prompt(self):
+        rec = make_private_prompt()
+        self.overlay.save(rec)
+        if self.source_combo.findText("private") < 0:
+            self.source_combo.addItem("private")
+        self._current_category = CAT_PRIVATE
+        self._refresh_tree()
+        self._on_filter_changed(CAT_PRIVATE)
+        loaded = self.db.get_by_ids([rec["id"]])
+        if loaded:
+            self.preview.show_prompt(loaded[0])
+            self.preview._start_edit()
+        self.statusBar().showMessage("Created private prompt draft", 3000)
 
     def _on_action(self, prompt_id: str, action: str):
         self.user_db.record_action(prompt_id, action)
@@ -1627,12 +1793,15 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Saved local edit to overlay.jsonl", 3000)
 
     def _on_overlay_reset(self, prompt_id: str):
+        was_private = any(r.get("id") == prompt_id and r.get("private") for r in self.overlay.private_records())
         self.overlay.remove(prompt_id)
         restored = self.db.get_by_ids([prompt_id])
         self._on_filter_changed()
         if restored:
             self.preview.show_prompt(restored[0])
-        self.statusBar().showMessage("Removed local edit", 3000)
+        elif was_private:
+            self.preview.show_welcome()
+        self.statusBar().showMessage("Deleted private prompt" if was_private else "Removed local edit", 3000)
 
     def _setup_tray(self):
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
@@ -1714,6 +1883,8 @@ class MainWindow(QMainWindow):
         elif category == CAT_RECENT:
             recent_ids = self.user_db.recent_ids(100)
             results = self.db.get_by_ids(recent_ids) if recent_ids else []
+        elif category == CAT_PRIVATE:
+            results = self.db.search(query=query, category=CAT_PRIVATE, role=role, min_quality=min_quality, source=source)
         else:
             results = self.db.search(query=query, category=category, role=role, min_quality=min_quality, source=source)
 
@@ -1735,6 +1906,13 @@ class MainWindow(QMainWindow):
                 "Prompts you copy or paste will\nautomatically appear here."
             )
             self.preview.stack.setCurrentIndex(0)
+        elif n == 0 and category == CAT_PRIVATE:
+            self.preview.empty.set_text(
+                "\u2726",
+                "No private prompts",
+                "Create one from the toolbar to keep it local."
+            )
+            self.preview.stack.setCurrentIndex(0)
         elif n == 0 and (query or role or min_quality or source):
             self.preview.show_no_results()
         elif n == 0:
@@ -1743,8 +1921,10 @@ class MainWindow(QMainWindow):
         parts = [f"{n:,} prompt{'s' if n != 1 else ''}"]
         if query:
             parts.append(f'matching "{query}"')
-        if category and category not in (CAT_FAVORITES, CAT_RECENT):
+        if category and category not in (CAT_FAVORITES, CAT_RECENT, CAT_PRIVATE):
             parts.append(f"in {category}")
+        if category == CAT_PRIVATE:
+            parts.append("in private prompts")
         self.statusBar().showMessage("  ".join(parts), 5000)
 
     def closeEvent(self, event):
