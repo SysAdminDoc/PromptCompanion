@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.6.1 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.6.2 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -79,7 +79,7 @@ USER_DIR.mkdir(parents=True, exist_ok=True)
 USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -538,7 +538,7 @@ PROMPT_FIELDS = (
     "target_models", "language", "source", "author", "license",
     "version", "quality", "created", "updated",
 )
-PROMPT_EXTRA_FIELDS = ("private",)
+PROMPT_EXTRA_FIELDS = ("private", "notes", "local_tags")
 PRIVATE_ENCRYPTION_ENV = "PROMPTCOMPANION_PRIVATE_PASSPHRASE"
 PRIVATE_ENCRYPTION_SCHEME = "fernet-pbkdf2-sha256-v1"
 
@@ -563,6 +563,19 @@ def parse_json_list(value, fallback: list | None = None) -> list:
     return list(fallback)
 
 
+def parse_tag_input(value: str) -> list[str]:
+    tags: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"[,;\s]+", value):
+        tag = re.sub(r"[^a-z0-9-]", "-", raw.strip().lower()).strip("-")
+        if tag and tag not in seen:
+            tags.append(tag[:32])
+            seen.add(tag)
+        if len(tags) >= 12:
+            break
+    return tags
+
+
 def extract_variables(body: str) -> list[dict]:
     seen: set[str] = set()
     variables: list[dict] = []
@@ -582,6 +595,7 @@ def make_private_prompt() -> dict:
         "role": "user",
         "category": "uncategorized",
         "tags": ["private"],
+        "local_tags": [],
         "variables": [],
         "target_models": ["any"],
         "language": "en",
@@ -592,6 +606,7 @@ def make_private_prompt() -> dict:
         "quality": 0,
         "created": now,
         "updated": now,
+        "notes": "",
         "private": True,
     }
 
@@ -713,8 +728,10 @@ class OverlayStore:
             if key in record:
                 normalized[key] = record[key]
         normalized["tags"] = parse_json_list(normalized.get("tags"))
+        normalized["local_tags"] = parse_json_list(normalized.get("local_tags"))
         normalized["variables"] = parse_json_list(normalized.get("variables"))
         normalized["target_models"] = parse_json_list(normalized.get("target_models"), ["any"])
+        normalized["notes"] = str(normalized.get("notes") or "")
         normalized["version"] = int(normalized.get("version") or 1)
         normalized["quality"] = int(normalized.get("quality") or 0)
         normalized["private"] = bool(normalized.get("private"))
@@ -852,10 +869,11 @@ class PromptDB:
         if not terms:
             return True
         tags = " ".join(str(t) for t in parse_json_list(rec.get("tags")))
+        local_tags = " ".join(str(t) for t in parse_json_list(rec.get("local_tags")))
         haystack = " ".join(
-            str(rec.get(k, "")) for k in ("title", "body", "author", "category", "role")
+            str(rec.get(k, "")) for k in ("title", "body", "author", "category", "role", "notes")
         )
-        haystack = f"{haystack} {tags}".lower()
+        haystack = f"{haystack} {tags} {local_tags}".lower()
         return all(term in haystack for term in terms)
 
     def _base_by_id(self, prompt_id: str) -> dict | None:
@@ -1273,6 +1291,22 @@ class PreviewPane(QWidget):
         self.tags_label.setVisible(False)
         layout.addWidget(self.tags_label)
 
+        self.local_group = QGroupBox("Local Details")
+        self.local_layout = QFormLayout(self.local_group)
+        self.local_layout.setContentsMargins(14, 10, 14, 10)
+        self.local_layout.setSpacing(8)
+
+        self.local_tags_edit = QLineEdit()
+        self.local_tags_edit.setPlaceholderText("comma-separated local tags")
+        self.local_layout.addRow(QLabel("Local Tags"), self.local_tags_edit)
+
+        self.notes_edit = QPlainTextEdit()
+        self.notes_edit.setPlaceholderText("Private notes, caveats, or usage reminders")
+        self.notes_edit.setMaximumHeight(84)
+        self.local_layout.addRow(QLabel("Notes"), self.notes_edit)
+        self.local_group.setVisible(False)
+        layout.addWidget(self.local_group)
+
         layout.addSpacing(12)
 
         # Divider
@@ -1403,6 +1437,16 @@ class PreviewPane(QWidget):
         self.title_label.setVisible(not editing)
         self.title_edit.setVisible(editing)
         self.body_text.setReadOnly(not editing)
+        self.local_tags_edit.setReadOnly(not editing)
+        self.notes_edit.setReadOnly(not editing)
+        has_local_details = bool(
+            editing or (
+                self._current and (
+                    parse_json_list(self._current.get("local_tags")) or self._current.get("notes")
+                )
+            )
+        )
+        self.local_group.setVisible(has_local_details)
         self.export_combo.setEnabled(not editing and not is_private)
         self.edit_btn.setVisible(not editing)
         self.edit_btn.setEnabled(has_prompt)
@@ -1444,6 +1488,8 @@ class PreviewPane(QWidget):
         updated["title"] = title
         updated["body"] = body
         updated["variables"] = extract_variables(body)
+        updated["local_tags"] = parse_tag_input(self.local_tags_edit.text())
+        updated["notes"] = self.notes_edit.toPlainText().strip()
         updated["updated"] = utc_now()
         updated["version"] = int(updated.get("version") or 1) + 1
         self.edit_saved.emit(updated)
@@ -1482,6 +1528,7 @@ class PreviewPane(QWidget):
 
         # Tags
         tags = json.loads(rec.get("tags", "[]")) if isinstance(rec.get("tags"), str) else rec.get("tags", [])
+        local_tags = parse_json_list(rec.get("local_tags"))
         if tags:
             spans = []
             for tag in tags[:12]:
@@ -1493,6 +1540,9 @@ class PreviewPane(QWidget):
             self.tags_label.setVisible(True)
         else:
             self.tags_label.setVisible(False)
+
+        self.local_tags_edit.setText(", ".join(local_tags))
+        self.notes_edit.setPlainText(str(rec.get("notes") or ""))
 
         # Body
         self.body_text.setPlainText(rec["body"])

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import promptcompanion
-from promptcompanion import OverlayStore, PromptDB, extract_variables, make_private_prompt
+from promptcompanion import OverlayStore, PromptDB, extract_variables, make_private_prompt, parse_tag_input
 
 
 SCHEMA = """
@@ -85,6 +85,12 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual(
             extract_variables("Hello {{ name }} and {{topic}} then {{name}}"),
             [{"name": "name"}, {"name": "topic"}],
+        )
+
+    def test_parse_tag_input_normalizes_unique_local_tags(self):
+        self.assertEqual(
+            parse_tag_input("Review, Drafting; review  Needs polish!"),
+            ["review", "drafting", "needs", "polish"],
         )
 
     def test_overlay_jsonl_layers_over_base_record(self):
@@ -158,6 +164,49 @@ class OverlayTests(unittest.TestCase):
 
             self.assertEqual([r["id"] for r in results], ["demo-one"])
             self.assertEqual(results[0]["title"], "Edited overlay title")
+
+    def test_overlay_notes_and_local_tags_are_searchable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = tmp_path / "prompts.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(SCHEMA)
+            insert_prompt(conn, "demo-one", "Base title", "Base body")
+            conn.close()
+
+            overlay = OverlayStore(tmp_path / "overlay.jsonl")
+            overlay.save(
+                {
+                    "id": "demo-one",
+                    "title": "Base title",
+                    "body": "Base body",
+                    "role": "user",
+                    "category": "writing",
+                    "tags": ["drafting"],
+                    "local_tags": ["localtag"],
+                    "notes": "Caveat about usage",
+                    "variables": [],
+                    "target_models": ["any"],
+                    "language": "en",
+                    "source": "https://example.test/source",
+                    "author": "Example",
+                    "license": "MIT",
+                    "version": 2,
+                    "quality": 55,
+                    "created": "2026-04-18T00:00:00Z",
+                    "updated": "2026-06-27T00:00:00Z",
+                }
+            )
+
+            db = PromptDB(db_path, overlay)
+            try:
+                tag_results = db.search(query="localtag")
+                notes_results = db.search(query="caveat")
+            finally:
+                db.close()
+
+            self.assertEqual([r["id"] for r in tag_results], ["demo-one"])
+            self.assertEqual([r["id"] for r in notes_results], ["demo-one"])
 
     def test_private_prompt_is_searchable_without_base_row(self):
         with tempfile.TemporaryDirectory() as tmp:
