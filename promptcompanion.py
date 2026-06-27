@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.6.2 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.6.3 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -14,6 +14,7 @@ import multiprocessing
 multiprocessing.freeze_support()
 
 import base64
+import difflib
 import hashlib
 import json
 import os
@@ -79,7 +80,7 @@ USER_DIR.mkdir(parents=True, exist_ok=True)
 USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 
-VERSION = "0.6.2"
+VERSION = "0.6.3"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -538,7 +539,7 @@ PROMPT_FIELDS = (
     "target_models", "language", "source", "author", "license",
     "version", "quality", "created", "updated",
 )
-PROMPT_EXTRA_FIELDS = ("private", "notes", "local_tags")
+PROMPT_EXTRA_FIELDS = ("private", "notes", "local_tags", "history")
 PRIVATE_ENCRYPTION_ENV = "PROMPTCOMPANION_PRIVATE_PASSPHRASE"
 PRIVATE_ENCRYPTION_SCHEME = "fernet-pbkdf2-sha256-v1"
 
@@ -609,6 +610,49 @@ def make_private_prompt() -> dict:
         "notes": "",
         "private": True,
     }
+
+
+def history_snapshot(record: dict) -> dict:
+    return {
+        "title": record.get("title", ""),
+        "body": record.get("body", ""),
+        "notes": record.get("notes", ""),
+        "local_tags": parse_json_list(record.get("local_tags")),
+        "version": int(record.get("version") or 1),
+        "updated": record.get("updated") or utc_now(),
+    }
+
+
+def history_changed(before: dict, after: dict) -> bool:
+    return any(
+        before.get(key) != after.get(key)
+        for key in ("title", "body", "notes", "local_tags")
+    )
+
+
+def format_history_diff(current: dict, previous: dict) -> str:
+    prev_lines = [
+        f"Title: {previous.get('title', '')}",
+        f"Local Tags: {', '.join(parse_json_list(previous.get('local_tags')))}",
+        f"Notes: {previous.get('notes', '')}",
+        "",
+        previous.get("body", ""),
+    ]
+    curr_lines = [
+        f"Title: {current.get('title', '')}",
+        f"Local Tags: {', '.join(parse_json_list(current.get('local_tags')))}",
+        f"Notes: {current.get('notes', '')}",
+        "",
+        current.get("body", ""),
+    ]
+    diff = difflib.unified_diff(
+        "\n".join(prev_lines).splitlines(),
+        "\n".join(curr_lines).splitlines(),
+        fromfile=f"v{previous.get('version', '?')} {previous.get('updated', '')}".strip(),
+        tofile=f"v{current.get('version', '?')} {current.get('updated', '')}".strip(),
+        lineterm="",
+    )
+    return "\n".join(diff) or "No text changes in the latest local revision."
 
 
 def _derive_private_key(passphrase: str, salt: bytes) -> bytes:
@@ -713,8 +757,15 @@ class OverlayStore:
     def apply_many(self, records: list[dict]) -> list[dict]:
         return [self.apply(r) for r in records]
 
-    def save(self, record: dict) -> None:
-        self._records[record["id"]] = self._normal_record(record)
+    def save(self, record: dict, previous: dict | None = None) -> None:
+        prompt_id = record["id"]
+        if previous is None:
+            previous = self._records.get(prompt_id)
+        if previous and history_changed(history_snapshot(previous), history_snapshot(record)):
+            history = parse_json_list(record.get("history") or previous.get("history"))
+            history.append(history_snapshot(previous))
+            record["history"] = history[-25:]
+        self._records[prompt_id] = self._normal_record(record)
         self._write()
 
     def remove(self, prompt_id: str) -> None:
@@ -729,6 +780,7 @@ class OverlayStore:
                 normalized[key] = record[key]
         normalized["tags"] = parse_json_list(normalized.get("tags"))
         normalized["local_tags"] = parse_json_list(normalized.get("local_tags"))
+        normalized["history"] = parse_json_list(normalized.get("history"))[-25:]
         normalized["variables"] = parse_json_list(normalized.get("variables"))
         normalized["target_models"] = parse_json_list(normalized.get("target_models"), ["any"])
         normalized["notes"] = str(normalized.get("notes") or "")
@@ -1219,6 +1271,7 @@ class PreviewPane(QWidget):
         self._var_inputs: dict[str, QLineEdit] = {}
         self._user_db = user_db
         self._edit_mode = False
+        self._showing_history = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1351,6 +1404,13 @@ class PreviewPane(QWidget):
 
         action_bar.addStretch()
 
+        self.history_btn = QPushButton("History")
+        self.history_btn.setToolTip("Show the latest local revision diff")
+        self.history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.history_btn.setVisible(False)
+        self.history_btn.clicked.connect(self._toggle_history)
+        action_bar.addWidget(self.history_btn)
+
         self.edit_btn = QPushButton("Edit")
         self.edit_btn.setToolTip("Edit this prompt in your local overlay")
         self.edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1446,8 +1506,10 @@ class PreviewPane(QWidget):
                 )
             )
         )
+        has_history = bool(self._current and parse_json_list(self._current.get("history")))
         self.local_group.setVisible(has_local_details)
         self.export_combo.setEnabled(not editing and not is_private)
+        self.history_btn.setVisible(not editing and has_history)
         self.edit_btn.setVisible(not editing)
         self.edit_btn.setEnabled(has_prompt)
         self.save_edit_btn.setVisible(editing)
@@ -1463,6 +1525,9 @@ class PreviewPane(QWidget):
     def _start_edit(self):
         if not self._current:
             return
+        if self._showing_history:
+            self._showing_history = False
+            self.body_text.setPlainText(self._current.get("body", ""))
         self.title_edit.setText(self._current.get("title", ""))
         self.body_text.setPlainText(self._current.get("body", ""))
         self._set_edit_mode(True)
@@ -1492,14 +1557,38 @@ class PreviewPane(QWidget):
         updated["notes"] = self.notes_edit.toPlainText().strip()
         updated["updated"] = utc_now()
         updated["version"] = int(updated.get("version") or 1) + 1
+        updated["_previous_record"] = dict(self._current)
         self.edit_saved.emit(updated)
 
     def _reset_overlay(self):
         if self._current:
             self.overlay_reset.emit(self._current["id"])
 
+    def _toggle_history(self):
+        if not self._current:
+            return
+        if self._showing_history:
+            self._showing_history = False
+            self.show_prompt(self._current)
+            return
+        history = parse_json_list(self._current.get("history"))
+        if not history:
+            return
+        self._showing_history = True
+        self.history_btn.setText("Hide History")
+        self.body_text.setReadOnly(True)
+        self.body_text.setPlainText(format_history_diff(self._current, history[-1]))
+        self.local_group.setVisible(False)
+        self.vars_group.setVisible(False)
+        self.copy_btn.setEnabled(False)
+        self.copy_filled_btn.setEnabled(False)
+        if IS_WIN and hasattr(self, "paste_btn"):
+            self.paste_btn.setEnabled(False)
+
     def show_prompt(self, rec: dict):
         self._current = rec
+        self._showing_history = False
+        self.history_btn.setText("History")
         self.stack.setCurrentIndex(1)
 
         self._update_fav_btn()
@@ -1835,7 +1924,8 @@ class MainWindow(QMainWindow):
             self._on_filter_changed()
 
     def _on_edit_saved(self, record: dict):
-        self.overlay.save(record)
+        previous = record.pop("_previous_record", None)
+        self.overlay.save(record, previous=previous)
         updated = self.db.get_by_ids([record["id"]])
         self._on_filter_changed()
         if updated:

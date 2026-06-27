@@ -14,7 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import promptcompanion
-from promptcompanion import OverlayStore, PromptDB, extract_variables, make_private_prompt, parse_tag_input
+from promptcompanion import (
+    OverlayStore,
+    PromptDB,
+    extract_variables,
+    format_history_diff,
+    make_private_prompt,
+    parse_tag_input,
+)
 
 
 SCHEMA = """
@@ -207,6 +214,45 @@ class OverlayTests(unittest.TestCase):
 
             self.assertEqual([r["id"] for r in tag_results], ["demo-one"])
             self.assertEqual([r["id"] for r in notes_results], ["demo-one"])
+
+    def test_overlay_save_appends_local_history_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "overlay.jsonl"
+            store = OverlayStore(path)
+            previous = {
+                "id": "demo-one",
+                "title": "Original",
+                "body": "Old body",
+                "role": "user",
+                "category": "writing",
+                "tags": ["drafting"],
+                "local_tags": [],
+                "notes": "",
+                "variables": [],
+                "target_models": ["any"],
+                "language": "en",
+                "source": "https://example.test/source",
+                "author": "Example",
+                "license": "MIT",
+                "version": 1,
+                "quality": 55,
+                "created": "2026-04-18T00:00:00Z",
+                "updated": "2026-04-18T00:00:00Z",
+            }
+            updated = dict(previous)
+            updated["title"] = "Updated"
+            updated["body"] = "New body"
+            updated["version"] = 2
+            updated["updated"] = "2026-06-27T00:00:00Z"
+
+            store.save(updated, previous=previous)
+            reloaded = OverlayStore(path)
+            record = reloaded.apply({"id": "demo-one"})
+
+            self.assertEqual(record["history"][0]["title"], "Original")
+            diff = format_history_diff(record, record["history"][0])
+            self.assertIn("-Title: Original", diff)
+            self.assertIn("+Title: Updated", diff)
 
     def test_private_prompt_is_searchable_without_base_row(self):
         with tempfile.TemporaryDirectory() as tmp:
