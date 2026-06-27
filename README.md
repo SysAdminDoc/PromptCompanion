@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.3-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
@@ -35,7 +35,7 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.5.3`
+### Current status — `v0.6.0`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
 - [x] 5 importers for upstream sources (CC0 + MIT only, English)
@@ -46,6 +46,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **FTS5 search bar** — full-text search with prefix matching
 - [x] **Filter controls** — role, quality threshold, source
 - [x] **Variable substitution** — fill `{{placeholders}}` inline, copy filled
+- [x] **Personal overlay edits** — edit bundled prompt titles/bodies locally without mutating source data
 - [x] **Favorites** — star any prompt, browse your favorites collection
 - [x] **History** — recently copied/pasted prompts tracked automatically
 - [x] **System tray** — minimize to tray, stays running in background
@@ -128,6 +129,7 @@ python build.py    # Produces dist/PromptCompanion.exe (single file, ~30 MB)
 ```
 
 Bundles the prompt database and logo. User data (favorites, history) stored in `~/.promptcompanion/`.
+Local prompt edits are layered from `overlay.jsonl` in the same user data directory, so bundled source prompts remain immutable.
 
 ## Prompt Record Schema
 
@@ -179,7 +181,7 @@ See [data/taxonomy.json](data/taxonomy.json) for the machine-readable vocabulary
 | **0.1.x** | More sources, dedupe heuristics, quality scoring |
 | **0.2.x** | PyQt6 desktop GUI, SQLite FTS5 search, variable panel |
 | **0.3.x** | System tray, global hotkey, paste-to-window, export profiles |
-| **0.4.x** | Personal overlay (edit bundled prompts without forking) |
+| **0.6.x** | Personal overlay edits without forking bundled data |
 | **1.0.0** | First stable release with full feature set |
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed release history.

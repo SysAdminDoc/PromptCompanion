@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.5.3 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.6.0 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
 Favorites, history, system tray, global hotkey (Win+Shift+P).
-Paste-to-active-window. Export as plain text, markdown, or JSON.
+Paste-to-active-window. Personal overlay edits. Export as plain text, markdown, or JSON.
 """
 
 from __future__ import annotations
+
+import multiprocessing
+
+multiprocessing.freeze_support()
 
 import json
 import re
@@ -21,7 +25,13 @@ from pathlib import Path
 IS_WIN = sys.platform == "win32"
 
 
+def _is_frozen() -> bool:
+    return getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS")
+
+
 def _bootstrap(packages: list[str]) -> None:
+    if _is_frozen():
+        return
     import importlib.util
     missing = [p for p in packages if importlib.util.find_spec(p.split("[")[0].split(">=")[0].split("==")[0]) is None]
     if not missing:
@@ -57,8 +67,9 @@ DB_PATH = ROOT / "data" / "index" / "prompts.db"
 LOGO_PATH = ROOT / "logo.png"
 USER_DIR.mkdir(parents=True, exist_ok=True)
 USER_DB_PATH = USER_DIR / "user.db"
+OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 
-VERSION = "0.5.3"
+VERSION = "0.6.0"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -219,6 +230,15 @@ QPushButton#favBtn {{
 }}
 QPushButton#favBtn:hover {{
     background-color: {C['surface0']};
+}}
+QLabel#overlayBadge {{
+    background-color: rgba(148,226,213,0.14);
+    color: {C['teal']};
+    border: 1px solid rgba(148,226,213,0.28);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
 }}
 
 /* -- Tree & Table -- */
@@ -502,6 +522,124 @@ class HotkeyThread(QThread):
         self.wait(2000)
 
 
+PROMPT_FIELDS = (
+    "id", "title", "body", "role", "category", "tags", "variables",
+    "target_models", "language", "source", "author", "license",
+    "version", "quality", "created", "updated",
+)
+VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]{0,63})\s*\}\}")
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_json_list(value, fallback: list | None = None) -> list:
+    if fallback is None:
+        fallback = []
+    if value is None:
+        return list(fallback)
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return [value] if value else list(fallback)
+        return parsed if isinstance(parsed, list) else list(fallback)
+    return list(fallback)
+
+
+def extract_variables(body: str) -> list[dict]:
+    seen: set[str] = set()
+    variables: list[dict] = []
+    for name in VAR_RE.findall(body):
+        if name not in seen:
+            variables.append({"name": name})
+            seen.add(name)
+    return variables
+
+
+class OverlayStore:
+    """JSONL prompt overlay layered over immutable bundled records."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._records: dict[str, dict] = {}
+        self.load()
+
+    def load(self) -> None:
+        self._records.clear()
+        if not self.path.exists():
+            return
+        for line_no, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as exc:
+                print(f"Skipping malformed overlay line {line_no}: {exc}", file=sys.stderr)
+                continue
+            prompt_id = rec.get("id")
+            if isinstance(prompt_id, str) and prompt_id:
+                self._records[prompt_id] = self._normal_record(rec)
+
+    def count(self) -> int:
+        return len(self._records)
+
+    def ids(self) -> set[str]:
+        return set(self._records)
+
+    def is_overridden(self, prompt_id: str) -> bool:
+        return prompt_id in self._records
+
+    def apply(self, record: dict) -> dict:
+        prompt_id = record.get("id")
+        override = self._records.get(prompt_id)
+        if not override:
+            return dict(record)
+        layered = dict(record)
+        layered.update(override)
+        layered["_overlay"] = True
+        layered["_overlay_updated"] = override.get("updated", "")
+        return layered
+
+    def apply_many(self, records: list[dict]) -> list[dict]:
+        return [self.apply(r) for r in records]
+
+    def save(self, record: dict) -> None:
+        self._records[record["id"]] = self._normal_record(record)
+        self._write()
+
+    def remove(self, prompt_id: str) -> None:
+        if prompt_id in self._records:
+            del self._records[prompt_id]
+            self._write()
+
+    def _normal_record(self, record: dict) -> dict:
+        normalized = {k: record[k] for k in PROMPT_FIELDS if k in record}
+        normalized["tags"] = parse_json_list(normalized.get("tags"))
+        normalized["variables"] = parse_json_list(normalized.get("variables"))
+        normalized["target_models"] = parse_json_list(normalized.get("target_models"), ["any"])
+        normalized["version"] = int(normalized.get("version") or 1)
+        normalized["quality"] = int(normalized.get("quality") or 0)
+        return normalized
+
+    def _write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self._records:
+            self.path.unlink(missing_ok=True)
+            return
+        tmp = self.path.with_suffix(".jsonl.tmp")
+        lines = [
+            json.dumps(self._records[prompt_id], ensure_ascii=False, sort_keys=True)
+            for prompt_id in sorted(self._records)
+        ]
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.replace(self.path)
+
+
 # -- User database (favorites + history) ------------------------------------
 class UserDB:
     def __init__(self, db_path: Path):
@@ -522,7 +660,7 @@ class UserDB:
         """)
 
     def _now(self) -> str:
-        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        return utc_now()
 
     def is_favorite(self, prompt_id: str) -> bool:
         return self.conn.execute("SELECT 1 FROM favorites WHERE prompt_id=?", (prompt_id,)).fetchone() is not None
@@ -563,20 +701,70 @@ class UserDB:
 
 # -- Prompt database --------------------------------------------------------
 class PromptDB:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, overlay: OverlayStore | None = None):
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.overlay = overlay
 
     def close(self):
         self.conn.close()
 
     def categories(self) -> list[tuple[str, int]]:
-        rows = self.conn.execute("SELECT category, COUNT(*) AS cnt FROM prompts GROUP BY category ORDER BY cnt DESC").fetchall()
-        return [(r["category"], r["cnt"]) for r in rows]
+        if not self.overlay or self.overlay.count() == 0:
+            rows = self.conn.execute("SELECT category, COUNT(*) AS cnt FROM prompts GROUP BY category ORDER BY cnt DESC").fetchall()
+            return [(r["category"], r["cnt"]) for r in rows]
+        counts: dict[str, int] = {}
+        rows = self.conn.execute("SELECT id, category FROM prompts").fetchall()
+        for row in rows:
+            rec = self.overlay.apply(dict(row))
+            cat = rec.get("category") or "uncategorized"
+            counts[cat] = counts.get(cat, 0) + 1
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
     def total_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM prompts").fetchone()[0]
+
+    def _select_sql(self, prefix: str = "p") -> str:
+        fields = [
+            "rowid", "id", "title", "body", "role", "category", "tags",
+            "variables", "target_models", "language", "source", "author",
+            "license", "version", "quality", "created", "updated",
+        ]
+        return ", ".join(f"{prefix}.{field}" for field in fields)
+
+    def _matches_filters(self, rec: dict, category: str, role: str, min_quality: int, source: str) -> bool:
+        if category and rec.get("category") != category:
+            return False
+        if role and rec.get("role") != role:
+            return False
+        if min_quality > 0 and int(rec.get("quality") or 0) < min_quality:
+            return False
+        if source and not str(rec.get("id", "")).startswith(f"{source}-"):
+            return False
+        return True
+
+    def _matches_query(self, rec: dict, query: str) -> bool:
+        terms = [t.lower() for t in re.sub(r"[^\w\s]", " ", query.strip()).split() if t]
+        if not terms:
+            return True
+        tags = " ".join(str(t) for t in parse_json_list(rec.get("tags")))
+        haystack = " ".join(
+            str(rec.get(k, "")) for k in ("title", "body", "author", "category", "role")
+        )
+        haystack = f"{haystack} {tags}".lower()
+        return all(term in haystack for term in terms)
+
+    def _base_by_id(self, prompt_id: str) -> dict | None:
+        row = self.conn.execute(
+            f"SELECT {self._select_sql('p')} FROM prompts p WHERE p.id = ?",
+            (prompt_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def _all_records(self) -> list[dict]:
+        rows = self.conn.execute(f"SELECT {self._select_sql('p')} FROM prompts p").fetchall()
+        return [dict(r) for r in rows]
 
     def search(self, query: str = "", category: str = "", role: str = "",
                min_quality: int = 0, source: str = "", limit: int = 500) -> list[dict]:
@@ -606,14 +794,11 @@ class PromptDB:
             params.append(f"{source}-%")
 
         where_extra = f"AND {' AND '.join(conditions)}" if conditions else ""
-        params.append(limit)
 
         if fts_active:
+            params.append(limit)
             sql = f"""
-                SELECT p.rowid, p.id, p.title, p.body, p.role, p.category,
-                       p.tags, p.variables, p.target_models, p.language,
-                       p.source, p.author, p.license, p.version, p.quality,
-                       p.created, p.updated,
+                SELECT {self._select_sql('p')},
                        bm25(prompts_fts, 10.0, 1.0, 5.0, 2.0) AS rank
                 FROM prompts p
                 JOIN prompts_fts ON p.rowid = prompts_fts.rowid
@@ -621,29 +806,42 @@ class PromptDB:
                 ORDER BY rank, p.quality DESC
                 LIMIT ?
             """
-        else:
-            where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-            sql = f"""
-                SELECT p.rowid, p.id, p.title, p.body, p.role, p.category,
-                       p.tags, p.variables, p.target_models, p.language,
-                       p.source, p.author, p.license, p.version, p.quality,
-                       p.created, p.updated
-                FROM prompts p {where}
-                ORDER BY p.quality DESC, p.title ASC
-                LIMIT ?
-            """
+            rows = self.conn.execute(sql, params).fetchall()
+            results = self.overlay.apply_many([dict(r) for r in rows]) if self.overlay else [dict(r) for r in rows]
+            if self.overlay:
+                results = [
+                    r for r in results
+                    if self._matches_filters(r, category, role, min_quality, source) and self._matches_query(r, query)
+                ]
+                seen = {r["id"] for r in results}
+                for prompt_id in sorted(self.overlay.ids() - seen):
+                    base = self._base_by_id(prompt_id)
+                    if not base:
+                        continue
+                    rec = self.overlay.apply(base)
+                    if self._matches_filters(rec, category, role, min_quality, source) and self._matches_query(rec, query):
+                        results.append(rec)
+            return results[:limit]
 
-        rows = self.conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        records = self._all_records()
+        if self.overlay:
+            records = self.overlay.apply_many(records)
+        results = [
+            rec for rec in records
+            if self._matches_filters(rec, category, role, min_quality, source)
+        ]
+        results.sort(key=lambda r: (-int(r.get("quality") or 0), str(r.get("title", "")).casefold()))
+        return results[:limit]
 
     def get_by_ids(self, ids: list[str]) -> list[dict]:
         if not ids:
             return []
         placeholders = ",".join("?" * len(ids))
         rows = self.conn.execute(
-            f"SELECT * FROM prompts WHERE id IN ({placeholders})", ids
+            f"SELECT {self._select_sql('p')} FROM prompts p WHERE id IN ({placeholders})", ids
         ).fetchall()
-        by_id = {dict(r)["id"]: dict(r) for r in rows}
+        records = self.overlay.apply_many([dict(r) for r in rows]) if self.overlay else [dict(r) for r in rows]
+        by_id = {r["id"]: r for r in records}
         return [by_id[i] for i in ids if i in by_id]
 
     def sources(self) -> list[str]:
@@ -863,12 +1061,16 @@ class PreviewPane(QWidget):
     paste_requested = pyqtSignal(str)
     action_performed = pyqtSignal(str, str)  # prompt_id, action
     favorite_toggled = pyqtSignal(str, bool)  # prompt_id, is_now_fav
+    edit_saved = pyqtSignal(dict)
+    overlay_reset = pyqtSignal(str)
+    status_requested = pyqtSignal(str, int)
 
     def __init__(self, user_db: UserDB, parent=None):
         super().__init__(parent)
         self._current: dict | None = None
         self._var_inputs: dict[str, QLineEdit] = {}
         self._user_db = user_db
+        self._edit_mode = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -908,6 +1110,11 @@ class PreviewPane(QWidget):
         self.title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header.addWidget(self.title_label)
 
+        self.title_edit = QLineEdit()
+        self.title_edit.setVisible(False)
+        self.title_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        header.addWidget(self.title_edit)
+
         self.quality_pill_container = QWidget()
         qpc_layout = QHBoxLayout(self.quality_pill_container)
         qpc_layout.setContentsMargins(0, 0, 0, 0)
@@ -922,6 +1129,11 @@ class PreviewPane(QWidget):
         self.meta_label.setObjectName("metaLabel")
         self.meta_label.setWordWrap(True)
         layout.addWidget(self.meta_label)
+
+        self.overlay_badge = QLabel("Edited locally")
+        self.overlay_badge.setObjectName("overlayBadge")
+        self.overlay_badge.setVisible(False)
+        layout.addWidget(self.overlay_badge, alignment=Qt.AlignmentFlag.AlignLeft)
 
         layout.addSpacing(8)
 
@@ -975,6 +1187,35 @@ class PreviewPane(QWidget):
 
         action_bar.addStretch()
 
+        self.edit_btn = QPushButton("Edit")
+        self.edit_btn.setToolTip("Edit this prompt in your local overlay")
+        self.edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.edit_btn.setEnabled(False)
+        self.edit_btn.clicked.connect(self._start_edit)
+        action_bar.addWidget(self.edit_btn)
+
+        self.save_edit_btn = QPushButton("Save")
+        self.save_edit_btn.setObjectName("primaryBtn")
+        self.save_edit_btn.setToolTip("Save the local overlay edit")
+        self.save_edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_edit_btn.setVisible(False)
+        self.save_edit_btn.clicked.connect(self._save_edit)
+        action_bar.addWidget(self.save_edit_btn)
+
+        self.cancel_edit_btn = QPushButton("Cancel")
+        self.cancel_edit_btn.setToolTip("Discard unsaved changes")
+        self.cancel_edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_edit_btn.setVisible(False)
+        self.cancel_edit_btn.clicked.connect(self._cancel_edit)
+        action_bar.addWidget(self.cancel_edit_btn)
+
+        self.reset_overlay_btn = QPushButton("Revert")
+        self.reset_overlay_btn.setToolTip("Remove this local overlay edit")
+        self.reset_overlay_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_overlay_btn.setVisible(False)
+        self.reset_overlay_btn.clicked.connect(self._reset_overlay)
+        action_bar.addWidget(self.reset_overlay_btn)
+
         self.copy_btn = QPushButton("Copy")
         self.copy_btn.setToolTip("Copy prompt body to clipboard")
         self.copy_btn.setEnabled(False)
@@ -1023,15 +1264,69 @@ class PreviewPane(QWidget):
         self._update_fav_btn()
         self.favorite_toggled.emit(self._current["id"], is_fav)
 
+    def _set_edit_mode(self, editing: bool):
+        self._edit_mode = editing
+        has_prompt = self._current is not None
+        is_overlay = bool(self._current and self._current.get("_overlay"))
+
+        self.title_label.setVisible(not editing)
+        self.title_edit.setVisible(editing)
+        self.body_text.setReadOnly(not editing)
+        self.export_combo.setEnabled(not editing)
+        self.edit_btn.setVisible(not editing)
+        self.edit_btn.setEnabled(has_prompt)
+        self.save_edit_btn.setVisible(editing)
+        self.cancel_edit_btn.setVisible(editing)
+        self.reset_overlay_btn.setVisible(not editing and is_overlay)
+        self.copy_btn.setEnabled(has_prompt and not editing)
+        self.copy_filled_btn.setEnabled(has_prompt and not editing)
+        if IS_WIN and hasattr(self, "paste_btn"):
+            self.paste_btn.setEnabled(has_prompt and not editing)
+
+    def _start_edit(self):
+        if not self._current:
+            return
+        self.title_edit.setText(self._current.get("title", ""))
+        self.body_text.setPlainText(self._current.get("body", ""))
+        self._set_edit_mode(True)
+        self.title_edit.setFocus()
+        self.title_edit.selectAll()
+
+    def _cancel_edit(self):
+        if self._current:
+            self.show_prompt(self._current)
+
+    def _save_edit(self):
+        if not self._current:
+            return
+        title = self.title_edit.text().strip()
+        body = self.body_text.toPlainText().strip()
+        if not title:
+            self.status_requested.emit("Prompt title is required", 3000)
+            return
+        if not body:
+            self.status_requested.emit("Prompt body is required", 3000)
+            return
+        updated = dict(self._current)
+        updated["title"] = title
+        updated["body"] = body
+        updated["variables"] = extract_variables(body)
+        updated["updated"] = utc_now()
+        updated["version"] = int(updated.get("version") or 1) + 1
+        self.edit_saved.emit(updated)
+
+    def _reset_overlay(self):
+        if self._current:
+            self.overlay_reset.emit(self._current["id"])
+
     def show_prompt(self, rec: dict):
         self._current = rec
         self.stack.setCurrentIndex(1)
-        self.copy_btn.setEnabled(True)
-        if IS_WIN and hasattr(self, "paste_btn"):
-            self.paste_btn.setEnabled(True)
 
         self._update_fav_btn()
         self.title_label.setText(rec["title"])
+        self.title_edit.setText(rec["title"])
+        self.overlay_badge.setVisible(bool(rec.get("_overlay")))
 
         # Quality pill
         qpc = self.quality_pill_container.layout()
@@ -1088,8 +1383,11 @@ class PreviewPane(QWidget):
             self.vars_group.setVisible(False)
             self.copy_filled_btn.setVisible(False)
 
+        self._set_edit_mode(False)
+
     def show_no_results(self):
         self._current = None
+        self._set_edit_mode(False)
         self.copy_btn.setEnabled(False)
         if IS_WIN and hasattr(self, "paste_btn"):
             self.paste_btn.setEnabled(False)
@@ -1101,6 +1399,8 @@ class PreviewPane(QWidget):
         self.stack.setCurrentIndex(0)
 
     def show_welcome(self):
+        self._current = None
+        self._set_edit_mode(False)
         self.empty.set_text(
             "\u2750",
             "Select a prompt",
@@ -1170,7 +1470,8 @@ class MainWindow(QMainWindow):
         if LOGO_PATH.exists():
             self.setWindowIcon(QIcon(str(LOGO_PATH)))
 
-        self.db = PromptDB(DB_PATH)
+        self.overlay = OverlayStore(OVERLAY_PATH)
+        self.db = PromptDB(DB_PATH, self.overlay)
         self.user_db = UserDB(USER_DB_PATH)
         self._total = self.db.total_count()
 
@@ -1253,7 +1554,8 @@ class MainWindow(QMainWindow):
         # -- Status bar -----------------------------------------------------
         src_count = len(self.db.sources())
         hotkey_hint = "  |  Win+Shift+P to summon  |  Ctrl+K to search" if IS_WIN else "  |  Ctrl+K to search"
-        self.statusBar().showMessage(f"{self._total:,} prompts from {src_count} sources{hotkey_hint}")
+        overlay_hint = f"  |  {self.overlay.count():,} local edit{'s' if self.overlay.count() != 1 else ''}" if self.overlay.count() else ""
+        self.statusBar().showMessage(f"{self._total:,} prompts from {src_count} sources{overlay_hint}{hotkey_hint}")
 
         self._setup_tray()
         self._refresh_tree()
@@ -1272,6 +1574,9 @@ class MainWindow(QMainWindow):
         self.preview.paste_requested.connect(self._do_paste_to_window)
         self.preview.action_performed.connect(self._on_action)
         self.preview.favorite_toggled.connect(self._on_fav_toggled)
+        self.preview.edit_saved.connect(self._on_edit_saved)
+        self.preview.overlay_reset.connect(self._on_overlay_reset)
+        self.preview.status_requested.connect(self.statusBar().showMessage)
         self.role_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.quality_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.source_combo.currentIndexChanged.connect(self._on_filter_changed)
@@ -1312,6 +1617,22 @@ class MainWindow(QMainWindow):
         self._refresh_tree()
         if self._current_category == CAT_FAVORITES:
             self._on_filter_changed()
+
+    def _on_edit_saved(self, record: dict):
+        self.overlay.save(record)
+        updated = self.db.get_by_ids([record["id"]])
+        self._on_filter_changed()
+        if updated:
+            self.preview.show_prompt(updated[0])
+        self.statusBar().showMessage("Saved local edit to overlay.jsonl", 3000)
+
+    def _on_overlay_reset(self, prompt_id: str):
+        self.overlay.remove(prompt_id)
+        restored = self.db.get_by_ids([prompt_id])
+        self._on_filter_changed()
+        if restored:
+            self.preview.show_prompt(restored[0])
+        self.statusBar().showMessage("Removed local edit", 3000)
 
     def _setup_tray(self):
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()

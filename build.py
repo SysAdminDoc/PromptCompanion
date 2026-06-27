@@ -27,6 +27,7 @@ def main() -> int:
     root = Path(__file__).resolve().parent
     db_path = root / "data" / "index" / "prompts.db"
     logo_path = root / "logo.png"
+    runtime_hook = root / "tools" / "runtime_hook_mp.py"
 
     if not db_path.exists():
         print("Database not found. Run `python tools/build_index.py` first.")
@@ -57,6 +58,7 @@ def main() -> int:
         "--windowed",
         "--name", "PromptCompanion",
         "--add-data", f"{db_path};data/index",
+        "--runtime-hook", str(runtime_hook),
         # Hidden imports that PyInstaller misses for PyQt6
         "--hidden-import", "PyQt6.QtCore",
         "--hidden-import", "PyQt6.QtGui",
