@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.7.3-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.7.4-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
@@ -35,7 +35,7 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.7.3`
+### Current status — `v0.7.4`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
 - [x] 5 importers for upstream sources (CC0 + MIT only, English)
@@ -59,7 +59,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **System tray** — minimize to tray, stays running in background
 - [x] **Global hotkey** — Win+Shift+P summons window from anywhere (Windows)
 - [x] **Paste-to-active-window** — copies prompt and pastes into previous window
-- [x] **Export profiles** — Plain Text, Markdown, or JSON copy
+- [x] **Export profiles** — Plain Text, Markdown, Front Matter, or JSON copy
 - [x] **PyInstaller build** — `python build.py` produces a single `PromptCompanion.exe`
 
 ## Bundled Sources

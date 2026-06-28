@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.7.3 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.7.4 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -81,7 +81,7 @@ USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 IMPORT_DIR = USER_DIR / "imports"
 
-VERSION = "0.7.3"
+VERSION = "0.7.4"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -1336,6 +1336,44 @@ def export_markdown(rec: dict, body: str) -> str:
     lines.extend(["", "---", "", body, ""])
     return "\n".join(lines)
 
+
+def _yaml_scalar(value) -> str:
+    text = str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{text}"'
+
+
+def _yaml_list(values: list) -> list[str]:
+    cleaned = [str(v).strip() for v in values if str(v).strip()]
+    if not cleaned:
+        return [" []"]
+    return [""] + [f"  - {_yaml_scalar(item)}" for item in cleaned]
+
+
+def export_markdown_front_matter(rec: dict, body: str) -> str:
+    tags = parse_json_list(rec.get("tags"))
+    local_tags = parse_json_list(rec.get("local_tags"))
+    front_matter: list[str] = [
+        "---",
+        f"title: {_yaml_scalar(rec.get('title'))}",
+        f"prompt_id: {_yaml_scalar(rec.get('id'))}",
+        f"role: {_yaml_scalar(rec.get('role'))}",
+        f"category: {_yaml_scalar(rec.get('category'))}",
+        f"quality: {int(rec.get('quality') or 0)}",
+        f"language: {_yaml_scalar(rec.get('language'))}",
+        f"source: {_yaml_scalar(rec.get('source'))}",
+        f"author: {_yaml_scalar(rec.get('author'))}",
+        f"license: {_yaml_scalar(rec.get('license'))}",
+        f"updated: {_yaml_scalar(rec.get('updated'))}",
+        "tags:" + "\n".join(_yaml_list(tags)),
+        "local_tags:" + "\n".join(_yaml_list(local_tags)),
+        "---",
+        "",
+        body,
+        "",
+    ]
+    return "\n".join(front_matter)
+
+
 def export_json(rec: dict, body: str) -> str:
     obj = {"title": rec["title"], "body": body, "role": rec["role"], "category": rec["category"]}
     if rec.get("author"):
@@ -1345,7 +1383,12 @@ def export_json(rec: dict, body: str) -> str:
         obj["tags"] = tags
     return json.dumps(obj, indent=2, ensure_ascii=False)
 
-EXPORTERS = {"Plain Text": export_plain, "Markdown": export_markdown, "JSON": export_json}
+EXPORTERS = {
+    "Plain Text": export_plain,
+    "Markdown": export_markdown,
+    "Front Matter": export_markdown_front_matter,
+    "JSON": export_json,
+}
 
 
 # -- Empty state ------------------------------------------------------------

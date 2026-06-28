@@ -20,6 +20,7 @@ from promptcompanion import (
     PromptDB,
     estimate_token_count,
     expand_prompt_includes,
+    export_markdown_front_matter,
     extract_variables,
     fill_prompt_body,
     format_prompt_stats,
@@ -161,6 +162,30 @@ class OverlayTests(unittest.TestCase):
 
             self.assertEqual(expanded, "X Use a direct tone for {{audience}}. Y")
             self.assertEqual(filled, "X Use a direct tone for operators. runbooks")
+
+    def test_front_matter_export_profile_uses_yaml_metadata(self):
+        record = {
+            "id": "demo-one",
+            "title": 'Demo "Prompt"',
+            "role": "system",
+            "category": "development",
+            "tags": ["review", "static-site"],
+            "local_tags": [],
+            "language": "en",
+            "source": "https://example.test/source",
+            "author": "Example",
+            "license": "MIT",
+            "quality": 64,
+            "updated": "2026-06-28T00:00:00Z",
+        }
+
+        exported = export_markdown_front_matter(record, "Body text")
+
+        self.assertTrue(exported.startswith("---\n"))
+        self.assertIn('title: "Demo \\"Prompt\\""', exported)
+        self.assertIn("quality: 64", exported)
+        self.assertIn('  - "static-site"', exported)
+        self.assertIn("\n---\n\nBody text\n", exported)
 
     def test_compose_prompt_chain_passes_variables_across_steps(self):
         chain = compose_prompt_chain(
