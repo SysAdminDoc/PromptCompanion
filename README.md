@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.7.1-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.7.2-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
@@ -35,7 +35,7 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.7.1`
+### Current status — `v0.7.2`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
 - [x] 5 importers for upstream sources (CC0 + MIT only, English)
@@ -46,6 +46,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **FTS5 search bar** — full-text search with prefix matching
 - [x] **Filter controls** — role, quality threshold, source
 - [x] **Variable substitution** — fill `{{placeholders}}` inline, copy filled
+- [x] **Live preview stats** — filled previews show character and estimated token counts
 - [x] **Personal overlay edits** — edit bundled prompt titles/bodies, notes, and local tags without mutating source data
 - [x] **Local version history** — view the latest local edit as an embedded diff
 - [x] **Private prompts** — create local-only prompts with optional encrypted overlay storage

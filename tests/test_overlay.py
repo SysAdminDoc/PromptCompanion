@@ -18,8 +18,10 @@ from promptcompanion import (
     compose_prompt_chain,
     OverlayStore,
     PromptDB,
+    estimate_token_count,
     extract_variables,
     fill_prompt_body,
+    format_prompt_stats,
     format_history_diff,
     make_private_prompt,
     markdown_file_record,
@@ -104,6 +106,12 @@ class OverlayTests(unittest.TestCase):
             parse_tag_input("Review, Drafting; review  Needs polish!"),
             ["review", "drafting", "needs", "polish"],
         )
+
+    def test_prompt_stats_format_counts_characters_and_estimated_tokens(self):
+        text = "Hello, world!\nShip v0.7.2."
+
+        self.assertEqual(estimate_token_count(text), 11)
+        self.assertEqual(format_prompt_stats(text), "26 chars / ~11 tokens")
 
     def test_compose_prompt_chain_passes_variables_across_steps(self):
         chain = compose_prompt_chain(

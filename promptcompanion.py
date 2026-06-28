@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.7.1 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.7.2 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -81,7 +81,7 @@ USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 IMPORT_DIR = USER_DIR / "imports"
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -479,6 +479,7 @@ QToolTip {{
 """
 
 VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]{0,63})\s*\}\}")
+TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 # -- Special category keys -------------------------------------------------
 CAT_FAVORITES = "__favorites__"
@@ -734,6 +735,16 @@ def fill_prompt_body(body: str, values: dict[str, str]) -> str:
         filled = filled.replace("{{" + name + "}}", value)
         filled = re.sub(r"\{\{\s*" + re.escape(name) + r"\s*\}\}", value, filled)
     return filled
+
+
+def estimate_token_count(text: str) -> int:
+    if not text.strip():
+        return 0
+    return len(TOKEN_RE.findall(text))
+
+
+def format_prompt_stats(text: str) -> str:
+    return f"{len(text):,} chars / ~{estimate_token_count(text):,} tokens"
 
 
 def compose_prompt_chain(records: list[dict], values: dict[str, str] | None = None) -> str:
@@ -1579,6 +1590,12 @@ class PreviewPane(QWidget):
         self.body_text.setFont(bf)
         layout.addWidget(self.body_text, stretch=1)
 
+        self.body_stats_label = QLabel("0 chars / ~0 tokens")
+        self.body_stats_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.body_stats_label.setStyleSheet(f"color: {C['overlay1']}; font-size: 11px;")
+        self.body_text.textChanged.connect(self._update_body_stats)
+        layout.addWidget(self.body_stats_label)
+
         # Variable panel
         self.vars_group = QGroupBox("Variables")
         self.vars_layout = QVBoxLayout(self.vars_group)
@@ -2032,6 +2049,9 @@ class PreviewPane(QWidget):
             "Browse the list or use search to find a prompt.\nThe full preview will appear here."
         )
         self.stack.setCurrentIndex(0)
+
+    def _update_body_stats(self):
+        self.body_stats_label.setText(format_prompt_stats(self.body_text.toPlainText()))
 
     def _get_filled_body(self) -> str:
         if not self._current:
