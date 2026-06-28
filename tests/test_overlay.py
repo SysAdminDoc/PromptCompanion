@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 import promptcompanion
 from promptcompanion import (
+    compose_prompt_chain,
     OverlayStore,
     PromptDB,
     extract_variables,
@@ -100,6 +101,29 @@ class OverlayTests(unittest.TestCase):
             parse_tag_input("Review, Drafting; review  Needs polish!"),
             ["review", "drafting", "needs", "polish"],
         )
+
+    def test_compose_prompt_chain_passes_variables_across_steps(self):
+        chain = compose_prompt_chain(
+            [
+                {
+                    "title": "Research",
+                    "body": "Research {{topic}} for {{audience}}.",
+                    "role": "user",
+                    "category": "research",
+                },
+                {
+                    "title": "Draft",
+                    "body": "Draft for {{audience}} about {{topic}}.",
+                    "role": "user",
+                    "category": "writing",
+                },
+            ],
+            {"topic": "FTS5", "audience": "developers"},
+        )
+
+        self.assertIn("## Step 1: Research", chain)
+        self.assertIn("Research FTS5 for developers.", chain)
+        self.assertIn("Draft for developers about FTS5.", chain)
 
     def test_overlay_jsonl_layers_over_base_record(self):
         with tempfile.TemporaryDirectory() as tmp:

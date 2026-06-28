@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.6.4 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.7.0 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -81,7 +81,7 @@ USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 IMPORT_DIR = USER_DIR / "imports"
 
-VERSION = "0.6.4"
+VERSION = "0.7.0"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -665,6 +665,33 @@ def extract_variables(body: str) -> list[dict]:
             variables.append({"name": name})
             seen.add(name)
     return variables
+
+
+def fill_prompt_body(body: str, values: dict[str, str]) -> str:
+    filled = body
+    for name, value in values.items():
+        if not value:
+            continue
+        filled = filled.replace("{{" + name + "}}", value)
+        filled = re.sub(r"\{\{\s*" + re.escape(name) + r"\s*\}\}", value, filled)
+    return filled
+
+
+def compose_prompt_chain(records: list[dict], values: dict[str, str] | None = None) -> str:
+    if values is None:
+        values = {}
+    lines = ["# Prompt Chain", ""]
+    for idx, rec in enumerate(records, start=1):
+        lines.extend([
+            f"## Step {idx}: {rec.get('title', 'Untitled Prompt')}",
+            "",
+            f"Role: {rec.get('role', 'user')}",
+            f"Category: {str(rec.get('category', 'uncategorized')).replace('_', ' ').title()}",
+            "",
+            fill_prompt_body(str(rec.get("body", "")), values).strip(),
+            "",
+        ])
+    return "\n".join(lines).strip() + "\n"
 
 
 def make_private_prompt() -> dict:
@@ -1366,6 +1393,9 @@ class PreviewPane(QWidget):
     edit_saved = pyqtSignal(dict)
     overlay_reset = pyqtSignal(str)
     status_requested = pyqtSignal(str, int)
+    chain_step_requested = pyqtSignal(dict, dict)
+    chain_copy_requested = pyqtSignal()
+    chain_clear_requested = pyqtSignal()
 
     def __init__(self, user_db: UserDB, parent=None):
         super().__init__(parent)
@@ -1374,6 +1404,7 @@ class PreviewPane(QWidget):
         self._user_db = user_db
         self._edit_mode = False
         self._showing_history = False
+        self._chain_count = 0
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1506,6 +1537,27 @@ class PreviewPane(QWidget):
 
         action_bar.addStretch()
 
+        self.add_chain_btn = QPushButton("Add")
+        self.add_chain_btn.setToolTip("Add this prompt to the current chain")
+        self.add_chain_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_chain_btn.setEnabled(False)
+        self.add_chain_btn.clicked.connect(self._add_chain_step)
+        action_bar.addWidget(self.add_chain_btn)
+
+        self.copy_chain_btn = QPushButton("Chain")
+        self.copy_chain_btn.setToolTip("Copy the current prompt chain")
+        self.copy_chain_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_chain_btn.setVisible(False)
+        self.copy_chain_btn.clicked.connect(self.chain_copy_requested.emit)
+        action_bar.addWidget(self.copy_chain_btn)
+
+        self.clear_chain_btn = QPushButton("Clear")
+        self.clear_chain_btn.setToolTip("Clear the current prompt chain")
+        self.clear_chain_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_chain_btn.setVisible(False)
+        self.clear_chain_btn.clicked.connect(self.chain_clear_requested.emit)
+        action_bar.addWidget(self.clear_chain_btn)
+
         self.history_btn = QPushButton("History")
         self.history_btn.setToolTip("Show the latest local revision diff")
         self.history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1549,7 +1601,7 @@ class PreviewPane(QWidget):
         self.copy_btn.clicked.connect(self._copy_exported)
         action_bar.addWidget(self.copy_btn)
 
-        self.copy_filled_btn = QPushButton("Copy with Variables")
+        self.copy_filled_btn = QPushButton("Copy Vars")
         self.copy_filled_btn.setObjectName("primaryBtn")
         self.copy_filled_btn.setToolTip("Copy prompt with variable placeholders filled in")
         self.copy_filled_btn.setVisible(False)
@@ -1611,6 +1663,9 @@ class PreviewPane(QWidget):
         has_history = bool(self._current and parse_json_list(self._current.get("history")))
         self.local_group.setVisible(has_local_details)
         self.export_combo.setEnabled(not editing and not is_private)
+        self.add_chain_btn.setEnabled(has_prompt and not editing)
+        self.copy_chain_btn.setVisible(not editing and self._chain_count > 0)
+        self.clear_chain_btn.setVisible(not editing and self._chain_count > 0)
         self.history_btn.setVisible(not editing and has_history)
         self.edit_btn.setVisible(not editing)
         self.edit_btn.setEnabled(has_prompt)
@@ -1666,6 +1721,21 @@ class PreviewPane(QWidget):
         if self._current:
             self.overlay_reset.emit(self._current["id"])
 
+    def _chain_variable_values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for name, inp in self._var_inputs.items():
+            values[name] = inp.text() or inp.placeholderText()
+        return values
+
+    def _add_chain_step(self):
+        if self._current:
+            self.chain_step_requested.emit(dict(self._current), self._chain_variable_values())
+
+    def set_chain_count(self, count: int):
+        self._chain_count = count
+        self.copy_chain_btn.setText(f"Chain ({count})" if count else "Chain")
+        self._set_edit_mode(self._edit_mode)
+
     def _toggle_history(self):
         if not self._current:
             return
@@ -1684,6 +1754,7 @@ class PreviewPane(QWidget):
         self.vars_group.setVisible(False)
         self.copy_btn.setEnabled(False)
         self.copy_filled_btn.setEnabled(False)
+        self.add_chain_btn.setEnabled(False)
         if IS_WIN and hasattr(self, "paste_btn"):
             self.paste_btn.setEnabled(False)
 
@@ -1825,7 +1896,7 @@ class PreviewPane(QWidget):
         if not self._current:
             return
         QApplication.clipboard().setText(self._get_export_text(self._get_filled_body()))
-        self._flash_button(self.copy_filled_btn, "Copy with Variables")
+        self._flash_button(self.copy_filled_btn, "Copy Vars")
         self.action_performed.emit(self._current["id"], "copy")
 
     def _paste_to_window(self):
@@ -1844,6 +1915,8 @@ class MainWindow(QMainWindow):
         self.resize(1340, 820)
         self._prev_hwnd = None
         self._hotkey_thread = None
+        self._chain_steps: list[dict] = []
+        self._chain_values: dict[str, str] = {}
 
         if LOGO_PATH.exists():
             self.setWindowIcon(QIcon(str(LOGO_PATH)))
@@ -1963,6 +2036,9 @@ class MainWindow(QMainWindow):
         self.preview.edit_saved.connect(self._on_edit_saved)
         self.preview.overlay_reset.connect(self._on_overlay_reset)
         self.preview.status_requested.connect(self.statusBar().showMessage)
+        self.preview.chain_step_requested.connect(self._add_chain_step)
+        self.preview.chain_copy_requested.connect(self._copy_chain)
+        self.preview.chain_clear_requested.connect(self._clear_chain)
         self.role_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.quality_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.source_combo.currentIndexChanged.connect(self._on_filter_changed)
@@ -2046,6 +2122,27 @@ class MainWindow(QMainWindow):
         elif was_private:
             self.preview.show_welcome()
         self.statusBar().showMessage("Deleted private prompt" if was_private else "Removed local edit", 3000)
+
+    def _add_chain_step(self, record: dict, values: dict):
+        self._chain_steps.append(record)
+        for key, value in values.items():
+            if value:
+                self._chain_values[key] = value
+        self.preview.set_chain_count(len(self._chain_steps))
+        self.statusBar().showMessage(f"Added step {len(self._chain_steps)} to prompt chain", 3000)
+
+    def _copy_chain(self):
+        if not self._chain_steps:
+            self.statusBar().showMessage("Prompt chain is empty", 3000)
+            return
+        QApplication.clipboard().setText(compose_prompt_chain(self._chain_steps, self._chain_values))
+        self.statusBar().showMessage(f"Copied {len(self._chain_steps)}-step prompt chain", 3000)
+
+    def _clear_chain(self):
+        self._chain_steps.clear()
+        self._chain_values.clear()
+        self.preview.set_chain_count(0)
+        self.statusBar().showMessage("Cleared prompt chain", 3000)
 
     def _setup_tray(self):
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()

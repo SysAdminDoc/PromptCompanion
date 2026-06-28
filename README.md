@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.4-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.7.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
@@ -35,7 +35,7 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.6.4`
+### Current status — `v0.7.0`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
 - [x] 5 importers for upstream sources (CC0 + MIT only, English)
@@ -50,6 +50,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **Local version history** — view the latest local edit as an embedded diff
 - [x] **Private prompts** — create local-only prompts with optional encrypted overlay storage
 - [x] **Markdown import folder** — drop `.md` prompt files into the user import folder and sync on launch
+- [x] **Prompt chains** — build ordered multi-prompt pipelines with shared variable passthrough
 - [x] **Favorites** — star any prompt, browse your favorites collection
 - [x] **History** — recently copied/pasted prompts tracked automatically
 - [x] **System tray** — minimize to tray, stays running in background
@@ -187,6 +188,7 @@ See [data/taxonomy.json](data/taxonomy.json) for the machine-readable vocabulary
 | **0.2.x** | PyQt6 desktop GUI, SQLite FTS5 search, variable panel |
 | **0.3.x** | System tray, global hotkey, paste-to-window, export profiles |
 | **0.6.x** | Personal overlay edits without forking bundled data |
+| **0.7.x** | Prompt composition and reusable chain workflows |
 | **1.0.0** | First stable release with full feature set |
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed release history.
