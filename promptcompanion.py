@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.7.2 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.7.3 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -81,7 +81,7 @@ USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 IMPORT_DIR = USER_DIR / "imports"
 
-VERSION = "0.7.2"
+VERSION = "0.7.3"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -479,6 +479,7 @@ QToolTip {{
 """
 
 VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]{0,63})\s*\}\}")
+INCLUDE_RE = re.compile(r"\{\{\s*include:([a-zA-Z0-9_.:/-]{1,180})\s*\}\}")
 TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 # -- Special category keys -------------------------------------------------
@@ -583,6 +584,10 @@ def parse_tag_input(value: str) -> list[str]:
         if len(tags) >= 12:
             break
     return tags
+
+
+def slugify_ref(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower()).strip("-")
 
 
 def _canonical_preset_name(name: str) -> str | None:
@@ -727,8 +732,44 @@ def extract_variables(body: str) -> list[dict]:
     return variables
 
 
-def fill_prompt_body(body: str, values: dict[str, str]) -> str:
-    filled = body
+def merge_variables(*groups: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for group in groups:
+        for var in group:
+            name = str(var.get("name", "")).strip()
+            if name and name not in seen:
+                merged.append({"name": name, **{k: v for k, v in var.items() if k != "name"}})
+                seen.add(name)
+    return merged
+
+
+def expand_prompt_includes(
+    body: str,
+    resolver,
+    max_depth: int = 5,
+    seen: set[str] | None = None,
+) -> str:
+    if max_depth <= 0:
+        return body
+    if seen is None:
+        seen = set()
+
+    def replace(match: re.Match) -> str:
+        ref = match.group(1).strip()
+        key = ref.casefold()
+        if key in seen:
+            return match.group(0)
+        included = resolver(ref)
+        if not included:
+            return match.group(0)
+        return expand_prompt_includes(str(included), resolver, max_depth - 1, seen | {key}).strip()
+
+    return INCLUDE_RE.sub(replace, body)
+
+
+def fill_prompt_body(body: str, values: dict[str, str], include_resolver=None) -> str:
+    filled = expand_prompt_includes(body, include_resolver) if include_resolver else body
     for name, value in values.items():
         if not value:
             continue
@@ -747,7 +788,7 @@ def format_prompt_stats(text: str) -> str:
     return f"{len(text):,} chars / ~{estimate_token_count(text):,} tokens"
 
 
-def compose_prompt_chain(records: list[dict], values: dict[str, str] | None = None) -> str:
+def compose_prompt_chain(records: list[dict], values: dict[str, str] | None = None, include_resolver=None) -> str:
     if values is None:
         values = {}
     lines = ["# Prompt Chain", ""]
@@ -758,7 +799,7 @@ def compose_prompt_chain(records: list[dict], values: dict[str, str] | None = No
             f"Role: {rec.get('role', 'user')}",
             f"Category: {str(rec.get('category', 'uncategorized')).replace('_', ' ').title()}",
             "",
-            fill_prompt_body(str(rec.get("body", "")), values).strip(),
+            fill_prompt_body(str(rec.get("body", "")), values, include_resolver).strip(),
             "",
         ])
     return "\n".join(lines).strip() + "\n"
@@ -1143,6 +1184,10 @@ class PromptDB:
             records.extend(self.overlay.private_records())
         return records
 
+    def _layered_records(self) -> list[dict]:
+        records = self._all_records()
+        return self.overlay.apply_many(records) if self.overlay else records
+
     def private_records(self) -> list[dict]:
         if not self.overlay:
             return []
@@ -1234,6 +1279,36 @@ class PromptDB:
             records.extend([r for r in self.overlay.private_records() if r["id"] in ids and r["id"] not in found])
         by_id = {r["id"]: r for r in records}
         return [by_id[i] for i in ids if i in by_id]
+
+    def resolve_include_body(self, ref: str) -> str | None:
+        ref = ref.strip().strip("/")
+        if not ref:
+            return None
+        exact = self.get_by_ids([ref])
+        if exact:
+            return str(exact[0].get("body", ""))
+
+        category = ""
+        slug = slugify_ref(ref)
+        if "/" in ref:
+            category, slug = ref.split("/", 1)
+            category = category.strip().lower()
+            slug = slugify_ref(slug)
+        if not slug:
+            return None
+
+        candidates = []
+        for rec in self._layered_records():
+            if category and str(rec.get("category", "")).lower() != category:
+                continue
+            rec_id = str(rec.get("id", ""))
+            rec_title = str(rec.get("title", ""))
+            if slug in {slugify_ref(rec_id), slugify_ref(rec_title)} or slugify_ref(rec_id).endswith(f"-{slug}"):
+                candidates.append(rec)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda r: (-int(r.get("quality") or 0), str(r.get("title", "")).casefold()))
+        return str(candidates[0].get("body", ""))
 
     def sources(self) -> list[str]:
         rows = self.conn.execute("SELECT DISTINCT substr(id, 1, instr(id, '-') - 1) AS src FROM prompts ORDER BY src").fetchall()
@@ -1470,13 +1545,14 @@ class PreviewPane(QWidget):
     chain_copy_requested = pyqtSignal()
     chain_clear_requested = pyqtSignal()
 
-    def __init__(self, user_db: UserDB, parent=None):
+    def __init__(self, user_db: UserDB, include_resolver=None, parent=None):
         super().__init__(parent)
         self._current: dict | None = None
         self._var_inputs: dict[str, QLineEdit] = {}
         self._preset_values: dict[str, dict[str, str]] = {}
         self._loading_prompt = False
         self._user_db = user_db
+        self._include_resolver = include_resolver
         self._edit_mode = False
         self._showing_history = False
         self._chain_count = 0
@@ -1995,7 +2071,8 @@ class PreviewPane(QWidget):
         self.notes_edit.setPlainText(str(rec.get("notes") or ""))
 
         # Body
-        self.body_text.setPlainText(rec["body"])
+        resolved_body = self._resolved_body(rec)
+        self.body_text.setPlainText(resolved_body)
 
         # Variables
         self._loading_prompt = True
@@ -2004,7 +2081,8 @@ class PreviewPane(QWidget):
         self._reset_preset_combo()
         while self.vars_form.rowCount() > 0:
             self.vars_form.removeRow(0)
-        variables = json.loads(rec.get("variables", "[]")) if isinstance(rec.get("variables"), str) else rec.get("variables", [])
+        record_variables = json.loads(rec.get("variables", "[]")) if isinstance(rec.get("variables"), str) else rec.get("variables", [])
+        variables = merge_variables(record_variables, extract_variables(resolved_body))
         if variables:
             self.vars_group.setVisible(True)
             safe_values = self._preset_values.get(PRESET_SAFE, {})
@@ -2053,15 +2131,17 @@ class PreviewPane(QWidget):
     def _update_body_stats(self):
         self.body_stats_label.setText(format_prompt_stats(self.body_text.toPlainText()))
 
+    def _resolved_body(self, rec: dict | None = None) -> str:
+        target = rec or self._current
+        if not target:
+            return ""
+        body = str(target.get("body", ""))
+        return expand_prompt_includes(body, self._include_resolver) if self._include_resolver else body
+
     def _get_filled_body(self) -> str:
         if not self._current:
             return ""
-        body = self._current["body"]
-        for name, inp in self._var_inputs.items():
-            value = inp.text() or inp.placeholderText()
-            body = body.replace("{{" + name + "}}", value)
-            body = re.sub(r"\{\{\s*" + re.escape(name) + r"\s*\}\}", value, body)
-        return body
+        return fill_prompt_body(self._current["body"], self._chain_variable_values(), self._include_resolver)
 
     def _get_export_text(self, body: str) -> str:
         if not self._current:
@@ -2086,7 +2166,7 @@ class PreviewPane(QWidget):
     def _copy_exported(self):
         if not self._current:
             return
-        QApplication.clipboard().setText(self._get_export_text(self._current["body"]))
+        QApplication.clipboard().setText(self._get_export_text(self._resolved_body()))
         self._flash_button(self.copy_btn, "Copy")
         self.action_performed.emit(self._current["id"], "copy")
 
@@ -2100,7 +2180,7 @@ class PreviewPane(QWidget):
     def _paste_to_window(self):
         if not self._current:
             return
-        body = self._get_filled_body() if self._var_inputs else self._current["body"]
+        body = self._get_filled_body() if self._var_inputs else self._resolved_body()
         self.paste_requested.emit(self._get_export_text(body))
         self.action_performed.emit(self._current["id"], "paste")
 
@@ -2200,7 +2280,7 @@ class MainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.preview = PreviewPane(self.user_db)
+        self.preview = PreviewPane(self.user_db, self.db.resolve_include_body)
         scroll.setWidget(self.preview)
         splitter.addWidget(scroll)
 
@@ -2343,7 +2423,11 @@ class MainWindow(QMainWindow):
         if not self._chain_steps:
             self.statusBar().showMessage("Prompt chain is empty", 3000)
             return
-        QApplication.clipboard().setText(compose_prompt_chain(self._chain_steps, self._chain_values))
+        QApplication.clipboard().setText(compose_prompt_chain(
+            self._chain_steps,
+            self._chain_values,
+            self.db.resolve_include_body,
+        ))
         self.statusBar().showMessage(f"Copied {len(self._chain_steps)}-step prompt chain", 3000)
 
     def _clear_chain(self):

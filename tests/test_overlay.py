@@ -19,6 +19,7 @@ from promptcompanion import (
     OverlayStore,
     PromptDB,
     estimate_token_count,
+    expand_prompt_includes,
     extract_variables,
     fill_prompt_body,
     format_prompt_stats,
@@ -64,7 +65,16 @@ END;
 """
 
 
-def insert_prompt(conn: sqlite3.Connection, prompt_id: str, title: str, body: str) -> None:
+def insert_prompt(
+    conn: sqlite3.Connection,
+    prompt_id: str,
+    title: str,
+    body: str,
+    category: str = "writing",
+    variables: list[dict] | None = None,
+) -> None:
+    if variables is None:
+        variables = []
     conn.execute(
         """
         INSERT INTO prompts
@@ -77,9 +87,9 @@ def insert_prompt(conn: sqlite3.Connection, prompt_id: str, title: str, body: st
             title,
             body,
             "user",
-            "writing",
+            category,
             json.dumps(["drafting"]),
-            json.dumps([]),
+            json.dumps(variables),
             json.dumps(["any"]),
             "en",
             "https://example.test/source",
@@ -108,10 +118,49 @@ class OverlayTests(unittest.TestCase):
         )
 
     def test_prompt_stats_format_counts_characters_and_estimated_tokens(self):
-        text = "Hello, world!\nShip v0.7.2."
+        text = "Hello, world!\nShip v0.7.3."
 
         self.assertEqual(estimate_token_count(text), 11)
         self.assertEqual(format_prompt_stats(text), "26 chars / ~11 tokens")
+
+    def test_prompt_includes_expand_from_db_refs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "prompts.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(SCHEMA)
+            insert_prompt(
+                conn,
+                "system-tone-dev",
+                "Tone Dev",
+                "Use a direct tone for {{audience}}.",
+                category="system",
+                variables=[{"name": "audience"}],
+            )
+            insert_prompt(
+                conn,
+                "writer-wrapper",
+                "Wrapper",
+                "Before\n{{include:system/tone-dev}}\nAfter {{topic}}.",
+                variables=[{"name": "topic"}],
+            )
+            conn.close()
+
+            db = PromptDB(db_path)
+            try:
+                expanded = expand_prompt_includes(
+                    "X {{include:system/tone-dev}} Y",
+                    db.resolve_include_body,
+                )
+                filled = fill_prompt_body(
+                    "X {{include:system-tone-dev}} {{topic}}",
+                    {"audience": "operators", "topic": "runbooks"},
+                    db.resolve_include_body,
+                )
+            finally:
+                db.close()
+
+            self.assertEqual(expanded, "X Use a direct tone for {{audience}}. Y")
+            self.assertEqual(filled, "X Use a direct tone for operators. runbooks")
 
     def test_compose_prompt_chain_passes_variables_across_steps(self):
         chain = compose_prompt_chain(
