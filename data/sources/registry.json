@@ -62,6 +62,30 @@
       "importer": "tools/import_chatsys.py",
       "default_category": "system",
       "notes": "46 system prompts across educational, entertainment, utility, and others."
+    },
+    {
+      "key": "devprompts",
+      "name": "software-dev-prompt-library",
+      "repo": "https://github.com/codingthefuturewithai/software-dev-prompt-library.git",
+      "author": "Coding the Future with AI",
+      "license": "MIT",
+      "format": "markdown-tree",
+      "entry_path": "prompts",
+      "importer": "tools/import_devprompts.py",
+      "default_category": "development",
+      "notes": "Reusable software engineering prompts across architecture, coding, testing, documentation, requirements, planning, and learning."
+    },
+    {
+      "key": "chatgptlib",
+      "name": "chatgpt-prompts",
+      "repo": "https://github.com/pacholoamit/chatgpt-prompts.git",
+      "author": "pacholoamit",
+      "license": "MIT",
+      "format": "typescript-template-literals",
+      "entry_path": "src/lib/prompts.ts",
+      "importer": "tools/import_chatgptlib.py",
+      "default_category": "roleplay",
+      "notes": "Node/TypeScript prompt library with 140+ reusable ChatGPT role prompts; expected overlap is handled by body dedupe."
     }
   ]
 }

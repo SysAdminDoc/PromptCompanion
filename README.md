@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.7.4-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.8.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
-  <img src="https://img.shields.io/badge/prompts-3%2C511-brightgreen?style=flat-square" alt="prompts" />
+  <img src="https://img.shields.io/badge/prompts-3%2C585-brightgreen?style=flat-square" alt="prompts" />
 </p>
 
 ---
@@ -35,10 +35,10 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.7.4`
+### Current status — `v0.8.0`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
-- [x] 5 importers for upstream sources (CC0 + MIT only, English)
+- [x] 7 importers for upstream sources (CC0 + MIT only, English)
 - [x] Body-hash deduplication + quality scoring (0-100)
 - [x] SQLite FTS5 search with **bm25 relevance ranking** (title 10x, tags 5x, author 2x)
 - [x] **PyQt6 desktop GUI** — Catppuccin Mocha dark theme
@@ -71,6 +71,8 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 | [dontriskit/awesome-ai-system-prompts](https://github.com/dontriskit/awesome-ai-system-prompts) | MIT | Bundled |
 | [abilzerian/LLM-Prompt-Library](https://github.com/abilzerian/LLM-Prompt-Library) | MIT | Bundled |
 | [mustvlad/ChatGPT-System-Prompts](https://github.com/mustvlad/ChatGPT-System-Prompts) | MIT | Bundled |
+| [codingthefuturewithai/software-dev-prompt-library](https://github.com/codingthefuturewithai/software-dev-prompt-library) | MIT | Bundled |
+| [pacholoamit/chatgpt-prompts](https://github.com/pacholoamit/chatgpt-prompts) | MIT | Bundled |
 
 Each record retains its upstream `source`, `author`, and `license` fields for attribution.
 Only CC0 and MIT sources are bundled to keep the aggregate dataset permissively licensed.
@@ -92,6 +94,8 @@ PromptCompanion/
 │   ├── import_system.py   # Parse awesome-ai-system-prompts markdown tree
 │   ├── import_llmprompt.py# Parse LLM-Prompt-Library markdown + Jinja2
 │   ├── import_chatsys.py  # Parse ChatGPT-System-Prompts markdown
+│   ├── import_devprompts.py # Parse software-dev-prompt-library markdown tree
+│   ├── import_chatgptlib.py # Parse chatgpt-prompts TypeScript templates
 │   ├── validate.py        # Schema validation + deduplication
 │   └── build_index.py     # Compile SQLite FTS5 search index
 ├── promptcompanion.py       # Desktop GUI (PyQt6)
@@ -111,7 +115,9 @@ python tools/import_awesome.py     # Parse CSV → data/prompts/*.jsonl
 python tools/import_bigprompt.py   # Parse markdown tree
 python tools/import_system.py      # Parse system-prompt collection
 python tools/import_llmprompt.py   # Parse LLM-Prompt-Library (md + j2)
-python tools/import_chatsys.py    # Parse ChatGPT-System-Prompts
+python tools/import_chatsys.py     # Parse ChatGPT-System-Prompts
+python tools/import_devprompts.py  # Parse software-dev-prompt-library
+python tools/import_chatgptlib.py  # Parse chatgpt-prompts TypeScript templates
 python tools/validate.py           # Schema check + dedupe report
 python tools/build_index.py        # Emit data/index/prompts.db (FTS5)
 ```
@@ -192,6 +198,7 @@ See [data/taxonomy.json](data/taxonomy.json) for the machine-readable vocabulary
 | **0.3.x** | System tray, global hotkey, paste-to-window, export profiles |
 | **0.6.x** | Personal overlay edits without forking bundled data |
 | **0.7.x** | Prompt composition and reusable chain workflows |
+| **0.8.x** | Library growth, tagging, quality, and deprecation signals |
 | **1.0.0** | First stable release with full feature set |
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed release history.
