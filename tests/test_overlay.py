@@ -20,6 +20,7 @@ from promptcompanion import (
     extract_variables,
     format_history_diff,
     make_private_prompt,
+    markdown_file_record,
     parse_tag_input,
 )
 
@@ -253,6 +254,55 @@ class OverlayTests(unittest.TestCase):
             diff = format_history_diff(record, record["history"][0])
             self.assertIn("-Title: Original", diff)
             self.assertIn("+Title: Updated", diff)
+
+    def test_markdown_import_front_matter_builds_private_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            import_dir = Path(tmp) / "imports"
+            import_dir.mkdir()
+            md_path = import_dir / "review.md"
+            md_path.write_text(
+                "---\n"
+                "title: Review Template\n"
+                "category: development\n"
+                "tags: review, code\n"
+                "role: system\n"
+                "author: Local User\n"
+                "---\n"
+                "Review this {{topic}} carefully.\n",
+                encoding="utf-8",
+            )
+
+            record = markdown_file_record(import_dir, md_path)
+
+            self.assertTrue(record["private"])
+            self.assertEqual(record["title"], "Review Template")
+            self.assertEqual(record["category"], "development")
+            self.assertEqual(record["role"], "system")
+            self.assertEqual(record["local_tags"], ["imported", "review", "code"])
+            self.assertEqual(record["variables"], [{"name": "topic"}])
+            self.assertTrue(record["id"].startswith("import-md-"))
+
+    def test_markdown_import_sync_updates_changed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            import_dir = tmp_path / "imports"
+            import_dir.mkdir()
+            md_path = import_dir / "draft.md"
+            md_path.write_text("# First Title\n\nFirst body", encoding="utf-8")
+
+            store = OverlayStore(tmp_path / "overlay.jsonl")
+            self.assertEqual(store.sync_markdown_imports(import_dir), 1)
+            self.assertEqual(store.sync_markdown_imports(import_dir), 0)
+
+            first = store.private_records()[0]
+            md_path.write_text("# Second Title\n\nSecond body", encoding="utf-8")
+            self.assertEqual(store.sync_markdown_imports(import_dir), 1)
+            updated = store.private_records()[0]
+
+            self.assertEqual(first["id"], updated["id"])
+            self.assertEqual(updated["title"], "Second Title")
+            self.assertEqual(updated["version"], 2)
+            self.assertEqual(updated["history"][0]["title"], "First Title")
 
     def test_private_prompt_is_searchable_without_base_row(self):
         with tempfile.TemporaryDirectory() as tmp:

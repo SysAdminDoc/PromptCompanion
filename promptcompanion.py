@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.6.3 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.6.4 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -79,8 +79,9 @@ LOGO_PATH = ROOT / "logo.png"
 USER_DIR.mkdir(parents=True, exist_ok=True)
 USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
+IMPORT_DIR = USER_DIR / "imports"
 
-VERSION = "0.6.3"
+VERSION = "0.6.4"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -539,7 +540,7 @@ PROMPT_FIELDS = (
     "target_models", "language", "source", "author", "license",
     "version", "quality", "created", "updated",
 )
-PROMPT_EXTRA_FIELDS = ("private", "notes", "local_tags", "history")
+PROMPT_EXTRA_FIELDS = ("private", "notes", "local_tags", "history", "import_path", "import_sha256")
 PRIVATE_ENCRYPTION_ENV = "PROMPTCOMPANION_PRIVATE_PASSPHRASE"
 PRIVATE_ENCRYPTION_SCHEME = "fernet-pbkdf2-sha256-v1"
 
@@ -575,6 +576,85 @@ def parse_tag_input(value: str) -> list[str]:
         if len(tags) >= 12:
             break
     return tags
+
+
+def import_prompt_id(root: Path, path: Path) -> str:
+    rel = path.resolve().relative_to(root.resolve()).as_posix().lower()
+    digest = hashlib.sha256(rel.encode("utf-8")).hexdigest()[:20]
+    return f"import-md-{digest}"
+
+
+def split_front_matter(text: str) -> tuple[dict[str, str], str]:
+    if not text.startswith("---\n") and not text.startswith("---\r\n"):
+        return {}, text
+    normalized = text.replace("\r\n", "\n")
+    marker = normalized.find("\n---\n", 4)
+    if marker < 0:
+        return {}, text
+    raw_meta = normalized[4:marker]
+    body = normalized[marker + 5:].lstrip("\n")
+    meta: dict[str, str] = {}
+    for line in raw_meta.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip().lower()] = value.strip().strip("'\"")
+    return meta, body
+
+
+def title_from_markdown(path: Path, body: str, meta: dict[str, str]) -> str:
+    if meta.get("title"):
+        return meta["title"][:200]
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()[:200] or path.stem
+    return path.stem.replace("_", " ").replace("-", " ").title()[:200]
+
+
+def markdown_file_record(root: Path, path: Path) -> dict:
+    text = path.read_text(encoding="utf-8-sig")
+    meta, body = split_front_matter(text)
+    content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    now = utc_now()
+    category = meta.get("category", "uncategorized").lower().strip()
+    if category not in {
+        "development", "writing", "research", "creative", "business",
+        "productivity", "system", "roleplay", "translation", "specialized",
+        "uncategorized",
+    }:
+        category = "uncategorized"
+    tags = parse_tag_input(meta.get("tags", ""))
+    if "imported" not in tags:
+        tags.insert(0, "imported")
+    prompt_id = import_prompt_id(root, path)
+    try:
+        source = path.resolve().as_uri()
+    except ValueError:
+        source = f"file:///{path.resolve().as_posix()}"
+    return {
+        "id": prompt_id,
+        "title": title_from_markdown(path, body, meta),
+        "body": body.strip() or text.strip(),
+        "role": meta.get("role", "user").lower() if meta.get("role", "user").lower() in {"system", "user", "assistant"} else "user",
+        "category": category,
+        "tags": ["private"],
+        "local_tags": tags[:12],
+        "variables": extract_variables(body or text),
+        "target_models": ["any"],
+        "language": meta.get("language", "en"),
+        "source": source,
+        "author": meta.get("author", "Imported Markdown"),
+        "license": "Unknown",
+        "version": 1,
+        "quality": 0,
+        "created": now,
+        "updated": now,
+        "notes": f"Imported from {path.name}",
+        "private": True,
+        "import_path": path.resolve().as_posix(),
+        "import_sha256": content_hash,
+    }
 
 
 def extract_variables(body: str) -> list[dict]:
@@ -767,6 +847,28 @@ class OverlayStore:
             record["history"] = history[-25:]
         self._records[prompt_id] = self._normal_record(record)
         self._write()
+
+    def sync_markdown_imports(self, import_dir: Path) -> int:
+        import_dir.mkdir(parents=True, exist_ok=True)
+        changed = 0
+        for path in sorted(import_dir.rglob("*.md")):
+            if not path.is_file():
+                continue
+            try:
+                record = markdown_file_record(import_dir, path)
+            except OSError as exc:
+                print(f"Skipping markdown import {path}: {exc}", file=sys.stderr)
+                continue
+            previous = self._records.get(record["id"])
+            if previous and previous.get("import_sha256") == record["import_sha256"]:
+                continue
+            if previous:
+                record["created"] = previous.get("created", record["created"])
+                record["version"] = int(previous.get("version") or 1) + 1
+                record["history"] = parse_json_list(previous.get("history"))
+            self.save(record, previous=previous)
+            changed += 1
+        return changed
 
     def remove(self, prompt_id: str) -> None:
         if prompt_id in self._records:
@@ -1747,6 +1849,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(LOGO_PATH)))
 
         self.overlay = OverlayStore(OVERLAY_PATH)
+        self._imported_on_launch = self.overlay.sync_markdown_imports(IMPORT_DIR)
         self.db = PromptDB(DB_PATH, self.overlay)
         self.user_db = UserDB(USER_DB_PATH)
         self._total = self.db.total_count()
@@ -1837,7 +1940,8 @@ class MainWindow(QMainWindow):
         src_count = len(self.db.sources())
         hotkey_hint = "  |  Win+Shift+P to summon  |  Ctrl+K to search" if IS_WIN else "  |  Ctrl+K to search"
         overlay_hint = f"  |  {self.overlay.count():,} local edit{'s' if self.overlay.count() != 1 else ''}" if self.overlay.count() else ""
-        self.statusBar().showMessage(f"{self._total:,} prompts from {src_count} sources{overlay_hint}{hotkey_hint}")
+        import_hint = f"  |  {self._imported_on_launch:,} markdown import{'s' if self._imported_on_launch != 1 else ''} refreshed" if self._imported_on_launch else ""
+        self.statusBar().showMessage(f"{self._total:,} prompts from {src_count} sources{overlay_hint}{import_hint}{hotkey_hint}")
 
         self._setup_tray()
         self._refresh_tree()
