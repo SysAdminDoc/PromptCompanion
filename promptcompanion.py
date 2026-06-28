@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.7.0 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.7.1 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -81,7 +81,7 @@ USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 IMPORT_DIR = USER_DIR / "imports"
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -540,9 +540,15 @@ PROMPT_FIELDS = (
     "target_models", "language", "source", "author", "license",
     "version", "quality", "created", "updated",
 )
-PROMPT_EXTRA_FIELDS = ("private", "notes", "local_tags", "history", "import_path", "import_sha256")
+PROMPT_EXTRA_FIELDS = (
+    "private", "notes", "local_tags", "variable_presets", "history",
+    "import_path", "import_sha256",
+)
 PRIVATE_ENCRYPTION_ENV = "PROMPTCOMPANION_PRIVATE_PASSPHRASE"
 PRIVATE_ENCRYPTION_SCHEME = "fernet-pbkdf2-sha256-v1"
+PRESET_SAFE = "Safe defaults"
+PRESET_AGGRESSIVE = "Aggressive"
+VARIABLE_PRESET_NAMES = (PRESET_SAFE, PRESET_AGGRESSIVE)
 
 
 def utc_now() -> str:
@@ -576,6 +582,58 @@ def parse_tag_input(value: str) -> list[str]:
         if len(tags) >= 12:
             break
     return tags
+
+
+def _canonical_preset_name(name: str) -> str | None:
+    lookup = {preset.casefold(): preset for preset in VARIABLE_PRESET_NAMES}
+    return lookup.get(str(name).strip().casefold())
+
+
+def normalize_variable_presets(value) -> list[dict]:
+    by_name: dict[str, dict[str, str]] = {}
+    for preset in parse_json_list(value):
+        if not isinstance(preset, dict):
+            continue
+        name = _canonical_preset_name(str(preset.get("name", "")))
+        raw_values = preset.get("values")
+        if not name or not isinstance(raw_values, dict):
+            continue
+        values: dict[str, str] = {}
+        for raw_key, raw_value in raw_values.items():
+            key = str(raw_key).strip()
+            value_text = str(raw_value).strip()
+            if key and value_text:
+                values[key[:80]] = value_text[:1000]
+        if values:
+            by_name[name] = values
+    return [{"name": name, "values": by_name[name]} for name in VARIABLE_PRESET_NAMES if name in by_name]
+
+
+def variable_preset_map(value) -> dict[str, dict[str, str]]:
+    return {preset["name"]: dict(preset["values"]) for preset in normalize_variable_presets(value)}
+
+
+def set_variable_preset(record: dict, preset_name: str, values: dict[str, str]) -> dict:
+    name = _canonical_preset_name(preset_name)
+    if not name:
+        raise ValueError(f"Unknown variable preset: {preset_name}")
+    presets = variable_preset_map(record.get("variable_presets"))
+    cleaned = {
+        str(key).strip()[:80]: str(value).strip()[:1000]
+        for key, value in values.items()
+        if str(key).strip() and str(value).strip()
+    }
+    if cleaned:
+        presets[name] = cleaned
+    else:
+        presets.pop(name, None)
+    updated = dict(record)
+    updated["variable_presets"] = [
+        {"name": preset, "values": presets[preset]}
+        for preset in VARIABLE_PRESET_NAMES
+        if preset in presets
+    ]
+    return updated
 
 
 def import_prompt_id(root: Path, path: Path) -> str:
@@ -641,6 +699,7 @@ def markdown_file_record(root: Path, path: Path) -> dict:
         "tags": ["private"],
         "local_tags": tags[:12],
         "variables": extract_variables(body or text),
+        "variable_presets": [],
         "target_models": ["any"],
         "language": meta.get("language", "en"),
         "source": source,
@@ -705,6 +764,7 @@ def make_private_prompt() -> dict:
         "tags": ["private"],
         "local_tags": [],
         "variables": [],
+        "variable_presets": [],
         "target_models": ["any"],
         "language": "en",
         "source": "private://local",
@@ -911,6 +971,7 @@ class OverlayStore:
         normalized["local_tags"] = parse_json_list(normalized.get("local_tags"))
         normalized["history"] = parse_json_list(normalized.get("history"))[-25:]
         normalized["variables"] = parse_json_list(normalized.get("variables"))
+        normalized["variable_presets"] = normalize_variable_presets(normalized.get("variable_presets"))
         normalized["target_models"] = parse_json_list(normalized.get("target_models"), ["any"])
         normalized["notes"] = str(normalized.get("notes") or "")
         normalized["version"] = int(normalized.get("version") or 1)
@@ -1391,6 +1452,7 @@ class PreviewPane(QWidget):
     action_performed = pyqtSignal(str, str)  # prompt_id, action
     favorite_toggled = pyqtSignal(str, bool)  # prompt_id, is_now_fav
     edit_saved = pyqtSignal(dict)
+    preset_saved = pyqtSignal(dict)
     overlay_reset = pyqtSignal(str)
     status_requested = pyqtSignal(str, int)
     chain_step_requested = pyqtSignal(dict, dict)
@@ -1401,6 +1463,8 @@ class PreviewPane(QWidget):
         super().__init__(parent)
         self._current: dict | None = None
         self._var_inputs: dict[str, QLineEdit] = {}
+        self._preset_values: dict[str, dict[str, str]] = {}
+        self._loading_prompt = False
         self._user_db = user_db
         self._edit_mode = False
         self._showing_history = False
@@ -1517,9 +1581,50 @@ class PreviewPane(QWidget):
 
         # Variable panel
         self.vars_group = QGroupBox("Variables")
-        self.vars_layout = QFormLayout(self.vars_group)
+        self.vars_layout = QVBoxLayout(self.vars_group)
         self.vars_layout.setContentsMargins(14, 10, 14, 10)
         self.vars_layout.setSpacing(8)
+
+        preset_bar = QWidget()
+        preset_bar.setStyleSheet("background: transparent;")
+        preset_row = QHBoxLayout(preset_bar)
+        preset_row.setContentsMargins(0, 0, 0, 0)
+        preset_row.setSpacing(8)
+
+        preset_label = QLabel("Preset")
+        preset_label.setStyleSheet(f"color: {C['subtext0']}; font-size: 12px;")
+        preset_row.addWidget(preset_label)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(["Manual", *VARIABLE_PRESET_NAMES])
+        self.preset_combo.setToolTip("Apply saved variable values for this prompt")
+        self.preset_combo.currentTextChanged.connect(self._apply_variable_preset)
+        preset_row.addWidget(self.preset_combo, stretch=1)
+
+        self.save_safe_btn = QPushButton("Save Safe")
+        self.save_safe_btn.setToolTip("Save current variable values as this prompt's safe defaults")
+        self.save_safe_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_safe_btn.clicked.connect(lambda: self._save_variable_preset(PRESET_SAFE))
+        preset_row.addWidget(self.save_safe_btn)
+
+        self.save_aggressive_btn = QPushButton("Save Agg")
+        self.save_aggressive_btn.setToolTip("Save current variable values as this prompt's aggressive profile")
+        self.save_aggressive_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_aggressive_btn.clicked.connect(lambda: self._save_variable_preset(PRESET_AGGRESSIVE))
+        preset_row.addWidget(self.save_aggressive_btn)
+
+        self.clear_preset_btn = QPushButton("Clear")
+        self.clear_preset_btn.setToolTip("Clear the selected preset for this prompt")
+        self.clear_preset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_preset_btn.clicked.connect(self._clear_variable_preset)
+        preset_row.addWidget(self.clear_preset_btn)
+
+        self.vars_layout.addWidget(preset_bar)
+
+        self.vars_form = QFormLayout()
+        self.vars_form.setContentsMargins(0, 0, 0, 0)
+        self.vars_form.setSpacing(8)
+        self.vars_layout.addLayout(self.vars_form)
         self.vars_group.setVisible(False)
         layout.addWidget(self.vars_group)
 
@@ -1678,6 +1783,7 @@ class PreviewPane(QWidget):
         self.copy_filled_btn.setEnabled(has_prompt and not editing)
         if IS_WIN and hasattr(self, "paste_btn"):
             self.paste_btn.setEnabled(has_prompt and not editing)
+        self._set_preset_controls_enabled()
 
     def _start_edit(self):
         if not self._current:
@@ -1726,6 +1832,71 @@ class PreviewPane(QWidget):
         for name, inp in self._var_inputs.items():
             values[name] = inp.text() or inp.placeholderText()
         return values
+
+    def _typed_variable_values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for name, inp in self._var_inputs.items():
+            value = inp.text().strip()
+            if value:
+                values[name] = value
+        return values
+
+    def _set_preset_controls_enabled(self):
+        enabled = bool(self._current and self._var_inputs and not self._edit_mode)
+        for widget in (self.preset_combo, self.save_safe_btn, self.save_aggressive_btn):
+            widget.setEnabled(enabled)
+        selected = self.preset_combo.currentText()
+        self.clear_preset_btn.setEnabled(enabled and selected in self._preset_values)
+
+    def _reset_preset_combo(self):
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentText("Manual")
+        self.preset_combo.blockSignals(False)
+        self._set_preset_controls_enabled()
+
+    def _apply_variable_preset(self, preset_name: str):
+        if self._loading_prompt or preset_name == "Manual":
+            self._set_preset_controls_enabled()
+            return
+        values = self._preset_values.get(preset_name)
+        if not values:
+            self.status_requested.emit(f"No {preset_name.lower()} preset saved", 3000)
+            self._reset_preset_combo()
+            return
+        for name, inp in self._var_inputs.items():
+            inp.setText(values.get(name, ""))
+        self._set_preset_controls_enabled()
+        self.status_requested.emit(f"Applied {preset_name.lower()} preset", 2500)
+
+    def _save_variable_preset(self, preset_name: str):
+        if not self._current:
+            return
+        values = self._typed_variable_values()
+        if not values:
+            self.status_requested.emit(f"Fill at least one variable before saving {preset_name.lower()}", 3000)
+            return
+        updated = set_variable_preset(self._current, preset_name, values)
+        updated["updated"] = utc_now()
+        updated["version"] = int(updated.get("version") or 1) + 1
+        updated["_previous_record"] = dict(self._current)
+        self.preset_saved.emit(updated)
+
+    def _clear_variable_preset(self):
+        if not self._current:
+            return
+        preset_name = self.preset_combo.currentText()
+        if preset_name == "Manual":
+            self.status_requested.emit("Choose a preset before clearing it", 3000)
+            return
+        if preset_name not in self._preset_values:
+            self.status_requested.emit(f"No {preset_name.lower()} preset saved", 3000)
+            self._reset_preset_combo()
+            return
+        updated = set_variable_preset(self._current, preset_name, {})
+        updated["updated"] = utc_now()
+        updated["version"] = int(updated.get("version") or 1) + 1
+        updated["_previous_record"] = dict(self._current)
+        self.preset_saved.emit(updated)
 
     def _add_chain_step(self):
         if self._current:
@@ -1810,25 +1981,32 @@ class PreviewPane(QWidget):
         self.body_text.setPlainText(rec["body"])
 
         # Variables
+        self._loading_prompt = True
         self._var_inputs.clear()
-        while self.vars_layout.rowCount() > 0:
-            self.vars_layout.removeRow(0)
+        self._preset_values = variable_preset_map(rec.get("variable_presets"))
+        self._reset_preset_combo()
+        while self.vars_form.rowCount() > 0:
+            self.vars_form.removeRow(0)
         variables = json.loads(rec.get("variables", "[]")) if isinstance(rec.get("variables"), str) else rec.get("variables", [])
         if variables:
             self.vars_group.setVisible(True)
+            safe_values = self._preset_values.get(PRESET_SAFE, {})
             for var in variables:
                 name = var.get("name", "")
+                if not name:
+                    continue
                 inp = QLineEdit()
-                inp.setPlaceholderText(var.get("default", name))
+                inp.setPlaceholderText(safe_values.get(name, var.get("default", name)))
                 inp.textChanged.connect(self._update_preview)
                 self._var_inputs[name] = inp
                 lbl = QLabel(name.replace("_", " ").title())
                 lbl.setStyleSheet(f"color: {C['subtext0']}; font-size: 12px;")
-                self.vars_layout.addRow(lbl, inp)
+                self.vars_form.addRow(lbl, inp)
             self.copy_filled_btn.setVisible(True)
         else:
             self.vars_group.setVisible(False)
             self.copy_filled_btn.setVisible(False)
+        self._loading_prompt = False
 
         self._set_edit_mode(False)
 
@@ -2034,6 +2212,7 @@ class MainWindow(QMainWindow):
         self.preview.action_performed.connect(self._on_action)
         self.preview.favorite_toggled.connect(self._on_fav_toggled)
         self.preview.edit_saved.connect(self._on_edit_saved)
+        self.preview.preset_saved.connect(self._on_preset_saved)
         self.preview.overlay_reset.connect(self._on_overlay_reset)
         self.preview.status_requested.connect(self.statusBar().showMessage)
         self.preview.chain_step_requested.connect(self._add_chain_step)
@@ -2111,6 +2290,15 @@ class MainWindow(QMainWindow):
         if updated:
             self.preview.show_prompt(updated[0])
         self.statusBar().showMessage("Saved local edit to overlay.jsonl", 3000)
+
+    def _on_preset_saved(self, record: dict):
+        previous = record.pop("_previous_record", None)
+        self.overlay.save(record, previous=previous)
+        updated = self.db.get_by_ids([record["id"]])
+        self._on_filter_changed()
+        if updated:
+            self.preview.show_prompt(updated[0])
+        self.statusBar().showMessage("Saved variable preset to overlay.jsonl", 3000)
 
     def _on_overlay_reset(self, prompt_id: str):
         was_private = any(r.get("id") == prompt_id and r.get("private") for r in self.overlay.private_records())

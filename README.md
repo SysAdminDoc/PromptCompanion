@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.7.0-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.7.1-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform" />
   <img src="https://img.shields.io/badge/python-3.10%2B-yellow?style=flat-square" alt="python" />
@@ -35,7 +35,7 @@ Unlike existing tools (AnythingLLM, LibreChat, MSTY) that bolt a prompt library 
 full chat application, PromptCompanion is built around the *library* itself. The primary
 action is "find the right prompt and copy it." No chat window, no accounts, no cloud.
 
-### Current status — `v0.7.0`
+### Current status — `v0.7.1`
 
 - [x] Prompt record JSON Schema + category/tag taxonomy
 - [x] 5 importers for upstream sources (CC0 + MIT only, English)
@@ -51,6 +51,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **Private prompts** — create local-only prompts with optional encrypted overlay storage
 - [x] **Markdown import folder** — drop `.md` prompt files into the user import folder and sync on launch
 - [x] **Prompt chains** — build ordered multi-prompt pipelines with shared variable passthrough
+- [x] **Variable presets** — save Safe defaults and Aggressive variable profiles per prompt
 - [x] **Favorites** — star any prompt, browse your favorites collection
 - [x] **History** — recently copied/pasted prompts tracked automatically
 - [x] **System tray** — minimize to tray, stays running in background
@@ -133,7 +134,7 @@ python build.py    # Produces dist/PromptCompanion.exe (single file, ~30 MB)
 ```
 
 Bundles the prompt database and logo. User data (favorites, history) stored in `~/.promptcompanion/`.
-Local prompt edits are layered from `overlay.jsonl` in the same user data directory, so bundled source prompts remain immutable.
+Local prompt edits and per-prompt variable presets are layered from `overlay.jsonl` in the same user data directory, so bundled source prompts remain immutable.
 Set `PROMPTCOMPANION_PRIVATE_PASSPHRASE` before launch to encrypt private prompt lines in the overlay file.
 Place user `.md` prompts in `~/.promptcompanion/imports/` for the standalone app, or `data/user/imports/` when running from source.
 

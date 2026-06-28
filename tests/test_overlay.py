@@ -19,9 +19,12 @@ from promptcompanion import (
     OverlayStore,
     PromptDB,
     extract_variables,
+    fill_prompt_body,
     format_history_diff,
     make_private_prompt,
     markdown_file_record,
+    set_variable_preset,
+    variable_preset_map,
     parse_tag_input,
 )
 
@@ -124,6 +127,66 @@ class OverlayTests(unittest.TestCase):
         self.assertIn("## Step 1: Research", chain)
         self.assertIn("Research FTS5 for developers.", chain)
         self.assertIn("Draft for developers about FTS5.", chain)
+
+    def test_variable_preset_helpers_keep_safe_and_aggressive_profiles(self):
+        record = {"variable_presets": []}
+        record = set_variable_preset(
+            record,
+            "Safe defaults",
+            {"topic": "release notes", "audience": "maintainers"},
+        )
+        record = set_variable_preset(
+            record,
+            "Aggressive",
+            {"topic": "launch memo", "audience": "executives"},
+        )
+
+        presets = variable_preset_map(record["variable_presets"])
+
+        self.assertEqual(presets["Safe defaults"]["topic"], "release notes")
+        self.assertEqual(presets["Aggressive"]["audience"], "executives")
+        self.assertEqual(
+            fill_prompt_body("Write {{topic}} for {{ audience }}.", presets["Safe defaults"]),
+            "Write release notes for maintainers.",
+        )
+
+    def test_overlay_persists_variable_presets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "overlay.jsonl"
+            store = OverlayStore(path)
+            record = {
+                "id": "demo-one",
+                "title": "Preset Prompt",
+                "body": "Write about {{topic}} for {{audience}}.",
+                "role": "user",
+                "category": "writing",
+                "tags": ["drafting"],
+                "local_tags": [],
+                "variables": [{"name": "topic"}, {"name": "audience"}],
+                "variable_presets": [
+                    {
+                        "name": "Safe defaults",
+                        "values": {"topic": "FTS5", "audience": "developers"},
+                    }
+                ],
+                "target_models": ["any"],
+                "language": "en",
+                "source": "https://example.test/source",
+                "author": "Example",
+                "license": "MIT",
+                "version": 2,
+                "quality": 55,
+                "created": "2026-04-18T00:00:00Z",
+                "updated": "2026-06-28T00:00:00Z",
+            }
+
+            store.save(record)
+            reloaded = OverlayStore(path)
+            layered = reloaded.apply({"id": "demo-one"})
+            presets = variable_preset_map(layered["variable_presets"])
+
+            self.assertEqual(presets["Safe defaults"]["topic"], "FTS5")
+            self.assertEqual(layered["variables"], [{"name": "topic"}, {"name": "audience"}])
 
     def test_overlay_jsonl_layers_over_base_record(self):
         with tempfile.TemporaryDirectory() as tmp:
