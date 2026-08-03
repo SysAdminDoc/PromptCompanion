@@ -3,7 +3,8 @@
 
 Tables:
   prompts(id PK, title, body, role, category, tags_json, target_models_json,
-          language, source, author, license, version, created, updated)
+          language, source, author, license, translation metadata, version,
+          created, updated)
   prompts_fts(title, body, tags, author, content='prompts', content_rowid=rowid)
 
 The GUI (v0.2.x) reads directly from this database with no write access needed.
@@ -38,6 +39,9 @@ CREATE TABLE prompts (
     source        TEXT NOT NULL,
     author        TEXT NOT NULL DEFAULT '',
     license       TEXT NOT NULL,
+    translation_of TEXT NOT NULL DEFAULT '',
+    translated_from TEXT NOT NULL DEFAULT '',
+    translator    TEXT NOT NULL DEFAULT '',
     version       INTEGER NOT NULL,
     quality       INTEGER NOT NULL DEFAULT 0,
     created       TEXT NOT NULL,
@@ -106,8 +110,9 @@ def main() -> int:
                     INSERT INTO prompts
                     (id, title, body, role, category, tags, variables,
                      target_models, language, source, author, license,
+                     translation_of, translated_from, translator,
                      version, quality, created, updated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         r["id"],
@@ -122,6 +127,9 @@ def main() -> int:
                         r["source"],
                         r.get("author") or "",
                         r["license"],
+                        r.get("translation_of") or "",
+                        r.get("translated_from") or "",
+                        r.get("translator") or "",
                         r["version"],
                         r.get("quality", 0),
                         r["created"],

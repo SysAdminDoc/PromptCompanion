@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import promptcompanion
+from tools.validate import validate_translation_links
 from promptcompanion import (
     compose_prompt_chain,
     OverlayStore,
@@ -48,6 +49,9 @@ CREATE TABLE prompts (
     source TEXT NOT NULL,
     author TEXT NOT NULL DEFAULT '',
     license TEXT NOT NULL,
+    translation_of TEXT NOT NULL DEFAULT '',
+    translated_from TEXT NOT NULL DEFAULT '',
+    translator TEXT NOT NULL DEFAULT '',
     version INTEGER NOT NULL,
     quality INTEGER NOT NULL DEFAULT 0,
     created TEXT NOT NULL,
@@ -73,6 +77,7 @@ def insert_prompt(
     body: str,
     category: str = "writing",
     variables: list[dict] | None = None,
+    language: str = "en",
 ) -> None:
     if variables is None:
         variables = []
@@ -80,8 +85,9 @@ def insert_prompt(
         """
         INSERT INTO prompts
         (id, title, body, role, category, tags, variables, target_models,
-         language, source, author, license, version, quality, created, updated)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         language, source, author, license, translation_of, translated_from,
+         translator, version, quality, created, updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             prompt_id,
@@ -92,10 +98,13 @@ def insert_prompt(
             json.dumps(["drafting"]),
             json.dumps(variables),
             json.dumps(["any"]),
-            "en",
+            language,
             "https://example.test/source",
             "Example",
             "MIT",
+            "",
+            "",
+            "",
             1,
             55,
             "2026-04-18T00:00:00Z",
@@ -384,6 +393,67 @@ class OverlayTests(unittest.TestCase):
 
             self.assertEqual([r["id"] for r in tag_results], ["demo-one"])
             self.assertEqual([r["id"] for r in notes_results], ["demo-one"])
+
+    def test_search_filters_by_language_and_lists_overlay_languages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = tmp_path / "prompts.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(SCHEMA)
+            insert_prompt(conn, "demo-en", "English", "English body", language="en")
+            insert_prompt(conn, "demo-es", "Spanish", "Spanish body", language="es")
+            conn.close()
+
+            overlay = OverlayStore(tmp_path / "overlay.jsonl")
+            private = make_private_prompt()
+            private["language"] = "fr"
+            overlay.save(private)
+
+            db = PromptDB(db_path, overlay)
+            try:
+                es_results = db.search(language="es")
+                fr_results = db.search(language="fr")
+                languages = db.languages()
+            finally:
+                db.close()
+
+            self.assertEqual([r["id"] for r in es_results], ["demo-es"])
+            self.assertEqual([r["id"] for r in fr_results], [private["id"]])
+            self.assertEqual(languages, ["en", "es", "fr"])
+
+    def test_validate_translation_links_checks_original_language(self):
+        valid_records = {
+            "prompt-en": {"id": "prompt-en", "language": "en"},
+            "prompt-es": {
+                "id": "prompt-es",
+                "language": "es",
+                "translation_of": "prompt-en",
+                "translated_from": "en",
+                "translator": "Example Translator",
+            },
+        }
+        invalid_records = {
+            "prompt-en": {"id": "prompt-en", "language": "en"},
+            "prompt-bad": {
+                "id": "prompt-bad",
+                "language": "en",
+                "translation_of": "prompt-en",
+                "translated_from": "es",
+            },
+            "prompt-missing": {
+                "id": "prompt-missing",
+                "language": "fr",
+                "translation_of": "missing-original",
+                "translated_from": "en",
+            },
+        }
+
+        self.assertEqual(validate_translation_links(valid_records), [])
+        messages = validate_translation_links(invalid_records)
+
+        self.assertTrue(any("translated_from=es does not match" in msg for msg in messages))
+        self.assertTrue(any("language=en matches original language" in msg for msg in messages))
+        self.assertTrue(any("translation_of=missing-original was not found" in msg for msg in messages))
 
     def test_overlay_save_appends_local_history_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PromptCompanion v0.8.0 — Desktop GUI for curated AI prompts.
+"""PromptCompanion v0.8.1 — Desktop GUI for curated AI prompts.
 
 Three-pane layout: category tree | prompt list | preview + variables.
 SQLite FTS5 search with bm25 ranking. Catppuccin Mocha dark theme.
@@ -81,7 +81,7 @@ USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
 IMPORT_DIR = USER_DIR / "imports"
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 
 # -- Catppuccin Mocha ------------------------------------------------------
 C = {
@@ -540,7 +540,8 @@ class HotkeyThread(QThread):
 PROMPT_FIELDS = (
     "id", "title", "body", "role", "category", "tags", "variables",
     "target_models", "language", "source", "author", "license",
-    "version", "quality", "created", "updated",
+    "translation_of", "translated_from", "translator", "version",
+    "quality", "created", "updated",
 )
 PROMPT_EXTRA_FIELDS = (
     "private", "notes", "local_tags", "variable_presets", "history",
@@ -696,7 +697,7 @@ def markdown_file_record(root: Path, path: Path) -> dict:
         source = path.resolve().as_uri()
     except ValueError:
         source = f"file:///{path.resolve().as_posix()}"
-    return {
+    record = {
         "id": prompt_id,
         "title": title_from_markdown(path, body, meta),
         "body": body.strip() or text.strip(),
@@ -720,6 +721,10 @@ def markdown_file_record(root: Path, path: Path) -> dict:
         "import_path": path.resolve().as_posix(),
         "import_sha256": content_hash,
     }
+    for key in ("translation_of", "translated_from", "translator"):
+        if meta.get(key):
+            record[key] = meta[key]
+    return record
 
 
 def extract_variables(body: str) -> list[dict]:
@@ -1113,6 +1118,9 @@ class PromptDB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.overlay = overlay
+        self.prompt_columns = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(prompts)").fetchall()
+        }
 
     def close(self):
         self.conn.close()
@@ -1140,11 +1148,26 @@ class PromptDB:
         fields = [
             "rowid", "id", "title", "body", "role", "category", "tags",
             "variables", "target_models", "language", "source", "author",
-            "license", "version", "quality", "created", "updated",
+            "license", "translation_of", "translated_from", "translator",
+            "version", "quality", "created", "updated",
         ]
-        return ", ".join(f"{prefix}.{field}" for field in fields)
+        select_parts = []
+        for field in fields:
+            if field == "rowid" or field in self.prompt_columns:
+                select_parts.append(f"{prefix}.{field}")
+            else:
+                select_parts.append(f"'' AS {field}")
+        return ", ".join(select_parts)
 
-    def _matches_filters(self, rec: dict, category: str, role: str, min_quality: int, source: str) -> bool:
+    def _matches_filters(
+        self,
+        rec: dict,
+        category: str,
+        role: str,
+        min_quality: int,
+        source: str,
+        language: str,
+    ) -> bool:
         if category == CAT_PRIVATE:
             if not rec.get("private"):
                 return False
@@ -1155,6 +1178,8 @@ class PromptDB:
         if min_quality > 0 and int(rec.get("quality") or 0) < min_quality:
             return False
         if source and not str(rec.get("id", "")).startswith(f"{source}-"):
+            return False
+        if language and rec.get("language") != language:
             return False
         return True
 
@@ -1197,7 +1222,8 @@ class PromptDB:
         )
 
     def search(self, query: str = "", category: str = "", role: str = "",
-               min_quality: int = 0, source: str = "", limit: int = 500) -> list[dict]:
+               min_quality: int = 0, source: str = "", language: str = "",
+               limit: int = 500) -> list[dict]:
         fts_active = False
         conditions: list[str] = []
         params: list = []
@@ -1222,6 +1248,9 @@ class PromptDB:
         if source:
             conditions.append("p.id LIKE ?")
             params.append(f"{source}-%")
+        if language:
+            conditions.append("p.language = ?")
+            params.append(language)
 
         where_extra = f"AND {' AND '.join(conditions)}" if conditions else ""
 
@@ -1241,7 +1270,8 @@ class PromptDB:
             if self.overlay:
                 results = [
                     r for r in results
-                    if self._matches_filters(r, category, role, min_quality, source) and self._matches_query(r, query)
+                    if self._matches_filters(r, category, role, min_quality, source, language)
+                    and self._matches_query(r, query)
                 ]
                 seen = {r["id"] for r in results}
                 for prompt_id in sorted(self.overlay.ids() - seen):
@@ -1252,7 +1282,7 @@ class PromptDB:
                     )
                     if not rec:
                         continue
-                    if self._matches_filters(rec, category, role, min_quality, source) and self._matches_query(rec, query):
+                    if self._matches_filters(rec, category, role, min_quality, source, language) and self._matches_query(rec, query):
                         results.append(rec)
             return results[:limit]
 
@@ -1261,7 +1291,7 @@ class PromptDB:
             records = self.overlay.apply_many(records)
         results = [
             rec for rec in records
-            if self._matches_filters(rec, category, role, min_quality, source)
+            if self._matches_filters(rec, category, role, min_quality, source, language)
         ]
         results.sort(key=lambda r: (-int(r.get("quality") or 0), str(r.get("title", "")).casefold()))
         return results[:limit]
@@ -1317,6 +1347,17 @@ class PromptDB:
             sources.append("private")
         return sources
 
+    def languages(self) -> list[str]:
+        rows = self.conn.execute("SELECT DISTINCT language FROM prompts ORDER BY language").fetchall()
+        languages = {str(r["language"]) for r in rows if r["language"]}
+        if self.overlay:
+            languages.update(
+                str(rec.get("language", "")).strip()
+                for rec in self.overlay.records()
+                if str(rec.get("language", "")).strip()
+            )
+        return sorted(languages)
+
 
 # -- Export formatters ------------------------------------------------------
 def export_plain(rec: dict, body: str) -> str:
@@ -1330,6 +1371,9 @@ def export_markdown(rec: dict, body: str) -> str:
         meta.append(f"**Author:** {rec['author']}")
     meta.append(f"**Role:** {rec['role']}")
     meta.append(f"**Category:** {rec['category']}")
+    meta.append(f"**Language:** {rec.get('language', 'en')}")
+    if rec.get("translation_of"):
+        meta.append(f"**Translation of:** {rec['translation_of']}")
     if tags:
         meta.append(f"**Tags:** {', '.join(tags)}")
     lines.append(" | ".join(meta))
@@ -1360,6 +1404,11 @@ def export_markdown_front_matter(rec: dict, body: str) -> str:
         f"category: {_yaml_scalar(rec.get('category'))}",
         f"quality: {int(rec.get('quality') or 0)}",
         f"language: {_yaml_scalar(rec.get('language'))}",
+    ]
+    for key in ("translation_of", "translated_from", "translator"):
+        if rec.get(key):
+            front_matter.append(f"{key}: {_yaml_scalar(rec.get(key))}")
+    front_matter.extend([
         f"source: {_yaml_scalar(rec.get('source'))}",
         f"author: {_yaml_scalar(rec.get('author'))}",
         f"license: {_yaml_scalar(rec.get('license'))}",
@@ -1370,14 +1419,23 @@ def export_markdown_front_matter(rec: dict, body: str) -> str:
         "",
         body,
         "",
-    ]
+    ])
     return "\n".join(front_matter)
 
 
 def export_json(rec: dict, body: str) -> str:
-    obj = {"title": rec["title"], "body": body, "role": rec["role"], "category": rec["category"]}
+    obj = {
+        "title": rec["title"],
+        "body": body,
+        "role": rec["role"],
+        "category": rec["category"],
+        "language": rec.get("language", "en"),
+    }
     if rec.get("author"):
         obj["author"] = rec["author"]
+    for key in ("translation_of", "translated_from", "translator"):
+        if rec.get(key):
+            obj[key] = rec[key]
     tags = json.loads(rec.get("tags", "[]")) if isinstance(rec.get("tags"), str) else rec.get("tags", [])
     if tags:
         obj["tags"] = tags
@@ -2092,6 +2150,9 @@ class PreviewPane(QWidget):
             parts.append(rec["author"])
         parts.append(rec["role"])
         parts.append(rec["category"].replace("_", " ").title())
+        parts.append(rec.get("language", "en"))
+        if rec.get("translation_of"):
+            parts.append(f"translation of {rec['translation_of']}")
         parts.append(rec["license"])
         self.meta_label.setText("  /  ".join(parts))
 
@@ -2293,6 +2354,14 @@ class MainWindow(QMainWindow):
         self.source_combo.setToolTip("Filter by upstream source")
         tb.addWidget(self.source_combo)
 
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("Any Lang")
+        for lang in self.db.languages():
+            self.language_combo.addItem(lang)
+        self.language_combo.setFixedWidth(95)
+        self.language_combo.setToolTip("Filter by prompt language")
+        tb.addWidget(self.language_combo)
+
         self.new_private_btn = QPushButton("New Private")
         self.new_private_btn.setToolTip("Create a local-only private prompt")
         self.new_private_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2364,6 +2433,7 @@ class MainWindow(QMainWindow):
         self.role_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.quality_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.source_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.language_combo.currentIndexChanged.connect(self._on_filter_changed)
 
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
@@ -2407,6 +2477,8 @@ class MainWindow(QMainWindow):
         self.overlay.save(rec)
         if self.source_combo.findText("private") < 0:
             self.source_combo.addItem("private")
+        if self.language_combo.findText(rec["language"]) < 0:
+            self.language_combo.addItem(rec["language"])
         self._current_category = CAT_PRIVATE
         self._refresh_tree()
         self._on_filter_changed(CAT_PRIVATE)
@@ -2552,6 +2624,7 @@ class MainWindow(QMainWindow):
         role = "" if self.role_combo.currentText() == "Any Role" else self.role_combo.currentText()
         min_quality = 60 if "60" in self.quality_combo.currentText() else 40 if "40" in self.quality_combo.currentText() else 20 if "20" in self.quality_combo.currentText() else 0
         source = "" if self.source_combo.currentText() == "Any Source" else self.source_combo.currentText()
+        language = "" if self.language_combo.currentText() == "Any Lang" else self.language_combo.currentText()
 
         if category == CAT_FAVORITES:
             fav_ids = list(self.user_db.favorite_ids())
@@ -2560,9 +2633,9 @@ class MainWindow(QMainWindow):
             recent_ids = self.user_db.recent_ids(100)
             results = self.db.get_by_ids(recent_ids) if recent_ids else []
         elif category == CAT_PRIVATE:
-            results = self.db.search(query=query, category=CAT_PRIVATE, role=role, min_quality=min_quality, source=source)
+            results = self.db.search(query=query, category=CAT_PRIVATE, role=role, min_quality=min_quality, source=source, language=language)
         else:
-            results = self.db.search(query=query, category=category, role=role, min_quality=min_quality, source=source)
+            results = self.db.search(query=query, category=category, role=role, min_quality=min_quality, source=source, language=language)
 
         self.prompt_table.load(results)
         n = len(results)
@@ -2589,7 +2662,7 @@ class MainWindow(QMainWindow):
                 "Create one from the toolbar to keep it local."
             )
             self.preview.stack.setCurrentIndex(0)
-        elif n == 0 and (query or role or min_quality or source):
+        elif n == 0 and (query or role or min_quality or source or language):
             self.preview.show_no_results()
         elif n == 0:
             self.preview.show_welcome()
@@ -2601,6 +2674,8 @@ class MainWindow(QMainWindow):
             parts.append(f"in {category}")
         if category == CAT_PRIVATE:
             parts.append("in private prompts")
+        if language:
+            parts.append(f"language {language}")
         self.statusBar().showMessage("  ".join(parts), 5000)
 
     def closeEvent(self, event):

@@ -96,6 +96,21 @@
       "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
       "description": "BCP-47 language code. Default 'en'."
     },
+    "translation_of": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,127}$",
+      "description": "Optional original prompt id when this record is a translated version."
+    },
+    "translated_from": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+      "description": "Original BCP-47 language code for translated records. Must match the referenced record."
+    },
+    "translator": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional translator attribution for community translation PRs."
+    },
     "source": {
       "type": "string",
       "format": "uri",

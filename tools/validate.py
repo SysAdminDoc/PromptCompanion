@@ -24,6 +24,47 @@ def _body_hash(body: str) -> str:
     return hashlib.sha256(body.strip().lower().encode("utf-8")).hexdigest()[:16]
 
 
+def validate_translation_links(records_by_id: dict[str, dict]) -> list[str]:
+    messages: list[str] = []
+    for rec_id, rec in sorted(records_by_id.items()):
+        translation_of = str(rec.get("translation_of") or "").strip()
+        translated_from = str(rec.get("translated_from") or "").strip()
+        translator = str(rec.get("translator") or "").strip()
+        language = str(rec.get("language") or "").strip()
+
+        if not translation_of:
+            if translated_from or translator:
+                messages.append(
+                    f"TRANSLATION [{rec_id}] translated_from/translator requires translation_of"
+                )
+            continue
+
+        if translation_of == rec_id:
+            messages.append(f"TRANSLATION [{rec_id}] translation_of cannot point to itself")
+            continue
+
+        source = records_by_id.get(translation_of)
+        if not source:
+            messages.append(f"TRANSLATION [{rec_id}] translation_of={translation_of} was not found")
+            continue
+
+        source_language = str(source.get("language") or "").strip()
+        if not translated_from:
+            messages.append(f"TRANSLATION [{rec_id}] translated_from is required")
+        elif translated_from != source_language:
+            messages.append(
+                f"TRANSLATION [{rec_id}] translated_from={translated_from} does not match "
+                f"{translation_of} language={source_language}"
+            )
+
+        if language and source_language and language == source_language:
+            messages.append(
+                f"TRANSLATION [{rec_id}] language={language} matches original language"
+            )
+
+    return messages
+
+
 def main() -> int:
     if not PROMPTS_DIR.exists():
         log("No data/prompts/ directory found. Run importers first.")
@@ -40,6 +81,7 @@ def main() -> int:
     errors = 0
     total = 0
     ids_seen: dict[str, str] = {}
+    records_by_id: dict[str, dict] = {}
     bodies_seen: dict[str, list[str]] = defaultdict(list)
     per_file: dict[str, int] = {}
 
@@ -67,10 +109,15 @@ def main() -> int:
                     errors += 1
                 else:
                     ids_seen[rec_id] = jsonl_path.name
+                    records_by_id[rec_id] = rec
 
             body = rec.get("body")
             if body:
                 bodies_seen[_body_hash(body)].append(rec_id or "<no-id>")
+
+    for message in validate_translation_links(records_by_id):
+        log(message)
+        errors += 1
 
     dup_bodies = 0
     for h, ids in bodies_seen.items():
