@@ -4,6 +4,12 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Opt-in, dependency-free local tag suggestions for every importer via `--auto-tags`.
+- `tools/auto_tag.py` for previewing or applying bounded taxonomy suggestions to existing JSONL data.
+
 ## [0.9.0] - 2026-08-09
 
 ### Added

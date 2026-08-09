@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -86,6 +87,119 @@ def sanitize_tags(tags: list[str]) -> list[str]:
     return out
 
 
+# Conservative, dependency-free tag suggestions used by the optional importer
+# autotag pass.  This intentionally behaves like a tiny classifier: title hits
+# carry more weight than body hits, and only high-confidence matches are added.
+_AUTO_TAG_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("codegen", ("code generation", "generate code", "write code", "programming")),
+    ("code-review", ("code review", "review code", "pull request", "pull-request")),
+    ("debugging", ("debug", "bug", "traceback", "exception", "stack trace")),
+    ("refactor", ("refactor", "clean code", "technical debt")),
+    ("testing", ("unit test", "test case", "pytest", "test suite", "testing")),
+    ("devops", ("devops", "docker", "kubernetes", "ci/cd", "deployment")),
+    ("sql", ("sql", "database query", "postgres", "mysql", "sqlite")),
+    ("api", ("api", "rest endpoint", "graphql", "webhook")),
+    ("blog", ("blog post", "blog article", "blogging")),
+    ("copy", ("copywriting", "ad copy", "landing page copy")),
+    ("email", ("email", "e-mail", "newsletter")),
+    ("editing", ("edit", "proofread", "grammar correction", "copy edit")),
+    ("rewrite", ("rewrite", "rephrase", "paraphrase")),
+    ("summarize", ("summarize", "summary", "executive summary")),
+    ("analysis", ("analyze", "analysis", "an analytical")),
+    ("fact-check", ("fact check", "fact-check", "verify claims")),
+    ("compare", ("compare", "comparison", "pros and cons")),
+    ("citation", ("citation", "cite sources", "bibliography")),
+    ("fiction", ("fiction", "short story", "novel")),
+    ("worldbuilding", ("worldbuilding", "world building", "fictional world")),
+    ("poetry", ("poem", "poetry", "verse")),
+    ("image-prompt", ("image prompt", "image generation", "text to image")),
+    ("strategy", ("business strategy", "strategic plan", "strategy")),
+    ("meeting", ("meeting notes", "meeting agenda", "standup")),
+    ("report", ("business report", "status report", "write a report")),
+    ("hiring", ("hiring", "job interview", "interview questions")),
+    ("planning", ("plan", "planning", "roadmap", "action items")),
+    ("learning", ("learn", "learning", "study guide")),
+    ("teaching", ("teach", "teacher", "lesson plan", "tutor")),
+    ("persona", ("persona", "act as", "you are a")),
+    ("agent", ("agent", "autonomous", "tool use")),
+    ("simulation", ("simulate", "simulation", "roleplay", "role-play")),
+    ("translate", ("translate", "translation", "translated")),
+    ("grammar", ("grammar", "grammatical")),
+    ("localize", ("localize", "localization", "locale")),
+    ("medical", ("medical", "doctor", "clinical", "patient")),
+    ("legal", ("legal", "lawyer", "contract", "compliance")),
+    ("finance", ("finance", "financial", "investing", "accounting")),
+    ("academic", ("academic", "scholarly", "thesis", "dissertation")),
+)
+
+_AUTO_TAG_LENGTHS = (("short", 250), ("medium", 1200), ("long", None))
+_AUTO_TAG_RISK_RULES = (
+    ("jailbreak", ("jailbreak", "ignore all prior instructions", "dan mode")),
+    ("nsfw", ("nsfw", "explicit sexual", "pornographic")),
+)
+
+
+def _keyword_hits(text: str, keyword: str) -> int:
+    pattern = r"\b" + re.escape(keyword.casefold()).replace(r"\ ", r"\s+") + r"\b"
+    return len(re.findall(pattern, text.casefold()))
+
+
+def suggest_tags(record: dict, max_new: int = 5) -> list[str]:
+    """Suggest high-confidence taxonomy tags without changing ``record``.
+
+    The classifier is intentionally explainable and offline.  It uses weighted
+    title/body keyword hits plus a small set of structural risk/length signals,
+    making importer output reproducible across machines and runs.
+    """
+    title = str(record.get("title") or "")
+    body = str(record.get("body") or "")
+    title_lower = title.casefold()
+    body_lower = body.casefold()
+    scores: dict[str, tuple[int, int]] = {}
+    for order, (tag, keywords) in enumerate(_AUTO_TAG_RULES):
+        score = 0
+        for keyword in keywords:
+            score += 3 * _keyword_hits(title_lower, keyword)
+            score += _keyword_hits(body_lower, keyword)
+        if score:
+            scores[tag] = (score, order)
+
+    length_tag = "long"
+    body_length = len(body)
+    for tag, upper_bound in _AUTO_TAG_LENGTHS:
+        if upper_bound is None or body_length <= upper_bound:
+            length_tag = tag
+            break
+    scores[length_tag] = (2, len(_AUTO_TAG_RULES))
+
+    for order, (tag, keywords) in enumerate(_AUTO_TAG_RISK_RULES, start=len(_AUTO_TAG_RULES) + 1):
+        score = sum(_keyword_hits(body_lower, keyword) for keyword in keywords)
+        if score:
+            scores[tag] = (score + 2, order)
+
+    existing = set(sanitize_tags(record.get("tags", [])))
+    ranked = sorted(scores.items(), key=lambda item: (-item[1][0], item[1][1], item[0]))
+    return [tag for tag, (score, _order) in ranked if score >= 1 and tag not in existing][:max(0, max_new)]
+
+
+def apply_suggested_tags(
+    records: list[dict],
+    *,
+    overwrite: bool = False,
+    max_new: int = 5,
+) -> int:
+    """Apply deterministic tag suggestions and return records that changed."""
+    changed = 0
+    for record in records:
+        current = sanitize_tags(record.get("tags", []))
+        suggestions = suggest_tags({**record, "tags": current}, max_new=max_new)
+        updated = sanitize_tags(suggestions if overwrite else current + suggestions)[:12]
+        if updated != current:
+            record["tags"] = updated
+            changed += 1
+    return changed
+
+
 def extract_variables(body: str) -> list[dict]:
     """Return deduplicated variable descriptors for {{name}} placeholders."""
     seen: dict[str, dict] = {}
@@ -151,8 +265,27 @@ def group_by_category(records: list[dict]) -> dict[str, list[dict]]:
     return buckets
 
 
-def merge_into_prompts_dir(new_records: list[dict]) -> dict[str, int]:
-    """Merge records into data/prompts/<category>.jsonl files. Returns per-category counts written."""
+def merge_into_prompts_dir(
+    new_records: list[dict],
+    *,
+    auto_tag: bool | None = None,
+) -> dict[str, int]:
+    """Merge records into category JSONL files.
+
+    Pass ``auto_tag=True`` (or add ``--auto-tags`` to an importer command) to
+    append deterministic local tag suggestions.  The default keeps the historic
+    importer behavior unchanged; ``PROMPTCOMPANION_AUTO_TAGS=1`` opts all
+    importers into the pass without requiring each importer to duplicate CLI
+    argument parsing.
+    """
+    if auto_tag is None:
+        auto_tag = (
+            "--auto-tags" in sys.argv
+            or os.environ.get("PROMPTCOMPANION_AUTO_TAGS", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+    if auto_tag:
+        apply_suggested_tags(new_records)
     counts: dict[str, int] = {}
     grouped_new = group_by_category(new_records)
     existing_by_category: dict[str, dict[str, dict]] = {}

@@ -15,7 +15,13 @@ sys.path.insert(0, str(ROOT))
 
 import promptcompanion
 from tools.validate import validate_translation_links
-from tools._common import apply_deprecation_flags, deprecation_reasons, score_quality  # noqa: E402
+from tools._common import (  # noqa: E402
+    apply_deprecation_flags,
+    apply_suggested_tags,
+    deprecation_reasons,
+    score_quality,
+    suggest_tags,
+)
 from promptcompanion import (
     compose_prompt_chain,
     OverlayStore,
@@ -136,6 +142,36 @@ def insert_prompt(
 
 
 class OverlayTests(unittest.TestCase):
+    def test_local_autotagging_is_deterministic_and_preserves_curated_tags(self):
+        record = {
+            "title": "Review Python code",
+            "body": "Debug the traceback, refactor the function, and add a unit test.",
+            "tags": ["curated"],
+        }
+
+        first = suggest_tags(record)
+        second = suggest_tags(record)
+
+        self.assertEqual(first, second)
+        self.assertIn("debugging", first)
+        self.assertIn("refactor", first)
+        self.assertNotIn("curated", first)
+        self.assertEqual(apply_suggested_tags([record]), 1)
+        self.assertIn("curated", record["tags"])
+        self.assertIn("debugging", record["tags"])
+
+    def test_local_autotagging_can_replace_tags_with_bounded_output(self):
+        record = {
+            "title": "Translate this text",
+            "body": "Translate the text and preserve the tone.",
+            "tags": ["old", "old", "manual"],
+        }
+
+        self.assertEqual(apply_suggested_tags([record], overwrite=True, max_new=2), 1)
+        self.assertLessEqual(len(record["tags"]), 12)
+        self.assertNotIn("old", record["tags"])
+        self.assertIn("translate", record["tags"])
+
     def test_quality_v2_uses_author_and_review_signals(self):
         base = {
             "id": "awesome-demo",

@@ -129,6 +129,10 @@ python tools/build_index.py        # Emit data/index/prompts.db (FTS5)
 ```
 
 Python 3.10+. All scripts auto-install dependencies on first run via `_bootstrap()`.
+Importers accept `--auto-tags` for an offline, deterministic taxonomy pass that
+appends high-confidence suggestions while preserving existing curated tags. To
+preview or apply suggestions to an existing corpus, use
+`python tools/auto_tag.py --dry-run` or `python tools/auto_tag.py`.
 
 ## Launch the GUI
 
