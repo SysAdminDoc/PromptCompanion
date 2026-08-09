@@ -66,7 +66,16 @@ def _bootstrap(packages: list[str]) -> None:
 
 _bootstrap(["PyQt6"])
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QSettings, QUrl
+from PyQt6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QSettings,
+    QThread,
+    QTimer,
+    QUrl,
+    Qt,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QIcon, QAction, QShortcut, QKeySequence, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -1864,14 +1873,84 @@ class CategoryTree(QTreeView):
 
 
 # -- Prompt list table ------------------------------------------------------
+class PromptTableModel(QAbstractTableModel):
+    """Batch-backed table model for prompt results."""
+
+    HEADERS = ("Score", "Title", "Category")
+
+    def __init__(self, parent=None, batch_size: int = 200):
+        super().__init__(parent)
+        self.batch_size = max(1, batch_size)
+        self._records: list[dict] = []
+        self._visible_count = 0
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else self._visible_count
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.HEADERS)
+
+    def set_records(self, records: list[dict]) -> None:
+        self.beginResetModel()
+        self._records = list(records)
+        self._visible_count = min(len(self._records), self.batch_size)
+        self.endResetModel()
+
+    def record_at(self, row: int) -> dict | None:
+        if 0 <= row < self._visible_count:
+            return self._records[row]
+        return None
+
+    def canFetchMore(self, parent=QModelIndex()):
+        return not parent.isValid() and self._visible_count < len(self._records)
+
+    def fetchMore(self, parent=QModelIndex()):
+        if parent.isValid() or not self.canFetchMore(parent):
+            return
+        first = self._visible_count
+        last = min(len(self._records), first + self.batch_size) - 1
+        self.beginInsertRows(QModelIndex(), first, last)
+        self._visible_count = last + 1
+        self.endInsertRows()
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or index.row() >= self._visible_count:
+            return None
+        record = self._records[index.row()]
+        column = index.column()
+        quality = int(record.get("quality") or 0)
+        if role == Qt.ItemDataRole.DisplayRole:
+            if column == 0:
+                return str(quality)
+            if column == 1:
+                return str(record.get("title") or "")
+            if column == 2:
+                return str(record.get("category") or "").replace("_", " ").title()
+        elif role == Qt.ItemDataRole.ToolTipRole and column == 1:
+            return str(record.get("title") or "")
+        elif role == Qt.ItemDataRole.TextAlignmentRole and column == 0:
+            return Qt.AlignmentFlag.AlignCenter
+        elif role == Qt.ItemDataRole.ForegroundRole:
+            if column == 0:
+                color = C["green"] if quality >= 60 else C["yellow"] if quality >= 35 else C["overlay0"]
+                return QColor(color)
+            if column == 2:
+                return QColor(C["overlay0"])
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return self.HEADERS[section] if 0 <= section < len(self.HEADERS) else None
+        return None
+
+
 class PromptTable(QTableView):
     prompt_selected = pyqtSignal(dict)
     keyboard_action = pyqtSignal(str, dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._model = QStandardItemModel()
-        self._model.setHorizontalHeaderLabels(["Score", "Title", "Category"])
+        self._model = PromptTableModel(self)
         self.setModel(self._model)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -1891,33 +1970,13 @@ class PromptTable(QTableView):
         self._data: list[dict] = []
 
     def load(self, records: list[dict]):
-        self._model.removeRows(0, self._model.rowCount())
-        self._data = records
-        for rec in records:
-            q = rec.get("quality", 0)
-            q_item = QStandardItem(str(q))
-            q_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if q >= 60:
-                q_item.setForeground(QColor(C["green"]))
-            elif q >= 35:
-                q_item.setForeground(QColor(C["yellow"]))
-            else:
-                q_item.setForeground(QColor(C["overlay0"]))
-
-            title_item = QStandardItem(rec["title"])
-            title_item.setToolTip(rec["title"])
-
-            cat_item = QStandardItem(rec["category"].replace("_", " ").title())
-            cat_item.setForeground(QColor(C["overlay0"]))
-
-            for it in (q_item, title_item, cat_item):
-                it.setEditable(False)
-            self._model.appendRow([q_item, title_item, cat_item])
+        self._data = list(records)
+        self._model.set_records(self._data)
 
     def _on_row(self, current, _previous):
-        row = current.row()
-        if 0 <= row < len(self._data):
-            self.prompt_selected.emit(self._data[row])
+        record = self._model.record_at(current.row())
+        if record:
+            self.prompt_selected.emit(record)
 
     def selected_records(self) -> list[dict]:
         rows = sorted({index.row() for index in self.selectionModel().selectedRows()})
@@ -1926,6 +1985,15 @@ class PromptTable(QTableView):
     def keyPressEvent(self, event):
         row = self.currentIndex().row()
         current = self._data[row] if 0 <= row < len(self._data) else None
+        if (
+            event.key() == Qt.Key.Key_A
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            while self._model.canFetchMore():
+                self._model.fetchMore()
+            self.selectAll()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Slash:
             self.keyboard_action.emit("search", current or {})
             event.accept()

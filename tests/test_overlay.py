@@ -27,6 +27,7 @@ from promptcompanion import (
     compose_prompt_chain,
     OverlayStore,
     PromptDB,
+    PromptTableModel,
     estimate_token_count,
     expand_prompt_includes,
     export_markdown_front_matter,
@@ -429,6 +430,22 @@ class OverlayTests(unittest.TestCase):
             self.assertEqual(responses[0]["id"], 3)
             rendered = responses[1]["result"]["structuredContent"]
             self.assertEqual(rendered["body"], "Write about testing")
+
+    def test_prompt_table_model_fetches_rows_in_batches(self):
+        model = PromptTableModel(batch_size=2)
+        model.set_records([
+            {"quality": 80, "title": "First", "category": "writing"},
+            {"quality": 40, "title": "Second", "category": "development"},
+            {"quality": 20, "title": "Third", "category": "research"},
+        ])
+
+        self.assertEqual(model.rowCount(), 2)
+        self.assertTrue(model.canFetchMore())
+        self.assertEqual(model.data(model.index(0, 1)), "First")
+        model.fetchMore()
+        self.assertEqual(model.rowCount(), 3)
+        self.assertFalse(model.canFetchMore())
+        self.assertEqual(model.data(model.index(2, 2)), "Research")
 
     def test_plugin_entry_points_load_callable_and_object_plugins(self):
         class Entry:

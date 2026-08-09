@@ -44,6 +44,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **PyQt6 desktop GUI** — Catppuccin Mocha dark theme
 - [x] **Three-pane layout** — category tree | prompt list | preview
 - [x] **FTS5 search bar** — full-text search with prefix matching
+- [x] **Incremental result model** — batched Qt table rows keep large result sets responsive
 - [x] **Filter controls** — role, quality threshold, source, language
 - [x] **Model compatibility filter** — OpenAI, Anthropic, or local targets (`any` matches all)
 - [x] **Recency-aware search ranking** — BM25 with a small freshness boost
