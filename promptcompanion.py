@@ -3102,6 +3102,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Cleared prompt chain", 3000)
 
     def _setup_tray(self):
+        # Some Windows shells report tray availability only after the first
+        # application paint/event cycle.  Defer the check so a valid tray is
+        # not missed during early window construction.
+        self._tray_available = False
+        self.tray = None
+        QTimer.singleShot(0, self._initialize_tray)
+
+    def _initialize_tray(self):
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
         if not self._tray_available:
             self.tray = None

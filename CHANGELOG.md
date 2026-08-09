@@ -12,6 +12,7 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 - Git-friendly overlay sync with deterministic JSONL bundles, version-aware merges, and conflict detection.
 - Dependency-free MCP-compatible stdio server with search, fetch, and variable-render tools.
 - Batched `QAbstractTableModel` prompt results with explicit fetch-more semantics for large searches.
+- Deferred system-tray initialization so Windows tray detection runs after the first Qt event cycle.
 
 ## [0.9.0] - 2026-08-09
 
