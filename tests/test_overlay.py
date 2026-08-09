@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import sqlite3
 import sys
@@ -59,6 +60,7 @@ from tools.updater import (  # noqa: E402
 from tools.plugins import discover_importers, run_importer  # noqa: E402
 from promptcompanion_cli import search_prompts  # noqa: E402
 from tools.sync import export_bundle, import_bundle, merge_overlay  # noqa: E402
+from tools.mcp_server import PromptMcpServer, serve_stdio  # noqa: E402
 
 
 SCHEMA = """
@@ -383,6 +385,50 @@ class OverlayTests(unittest.TestCase):
             result = merge_overlay(overlay, [update])
             self.assertEqual(result.changed, 1)
             self.assertIn("Newer edit", overlay.read_text(encoding="utf-8"))
+
+    def test_mcp_server_lists_searches_and_renders_prompts_over_stdio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "prompts.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(SCHEMA)
+            insert_prompt(conn, "demo-one", "CLI title", "Write about {{topic}}", variables=[{"name": "topic"}])
+            insert_prompt(conn, "demo-two", "Other", "Other body")
+            conn.close()
+
+            server = PromptMcpServer(db_path)
+            initialized = server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+            self.assertEqual(initialized["result"]["serverInfo"]["name"], "PromptCompanion")
+            listed = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            self.assertEqual(
+                {tool["name"] for tool in listed["result"]["tools"]},
+                {"search_prompts", "get_prompt", "render_prompt"},
+            )
+
+            stream_in = io.StringIO(
+                json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "search_prompts", "arguments": {"query": "Write"}},
+                })
+                + "\n"
+                + json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "render_prompt",
+                        "arguments": {"prompt_id": "demo-one", "variables": {"topic": "testing"}},
+                    },
+                })
+                + "\n"
+            )
+            stream_out = io.StringIO()
+            self.assertEqual(serve_stdio(server, stream_in, stream_out), 0)
+            responses = [json.loads(line) for line in stream_out.getvalue().splitlines()]
+            self.assertEqual(responses[0]["id"], 3)
+            rendered = responses[1]["result"]["structuredContent"]
+            self.assertEqual(rendered["body"], "Write about testing")
 
     def test_plugin_entry_points_load_callable_and_object_plugins(self):
         class Entry:

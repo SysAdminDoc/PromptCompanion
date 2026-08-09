@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from tools.plugins import discover_importers
+from tools.mcp_server import PromptMcpServer, serve_stdio
 from tools.sync import (
     SyncError,
     export_bundle,
@@ -100,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     search_parser.add_argument("--no-copy", action="store_false", dest="copy")
 
     subparsers.add_parser("plugins", help="List installed custom importer plugins")
+    subparsers.add_parser("mcp", help="Serve the prompt index over MCP-compatible stdio")
     sync_parser = subparsers.add_parser(
         "sync",
         help="Export or import a Git-friendly local overlay bundle",
@@ -129,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
         for name in sorted(plugins):
             print(name)
         return 0
+
+    if args.command == "mcp":
+        return serve_stdio(PromptMcpServer(args.db))
 
     if args.command == "sync":
         try:

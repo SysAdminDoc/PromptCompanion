@@ -63,6 +63,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **Global hotkey** — Win+Shift+P on Windows, Cmd/Ctrl+Shift+P on macOS/Linux (pynput backend)
 - [x] **Paste-to-active-window** — copies prompt and pastes into previous window
 - [x] **Export profiles** — Plain Text, Markdown, Front Matter, or JSON copy
+- [x] **MCP stdio server** — search, fetch, and render prompts from local MCP clients
 - [x] **Optional provider handoff** — ChatGPT, Claude, or local Ollama URL launch
 - [x] **Git-friendly overlay sync** — version-aware JSONL export/import with conflict detection
 - [x] **Portable mode** — place `portable.flag` beside the executable to keep DB/config next to it
@@ -175,6 +176,7 @@ Search without launching Qt and copy the best match to the system clipboard:
 python promptcompanion_cli.py search "code review"
 python promptcompanion_cli.py search "debugging" --category development --no-copy
 python promptcompanion_cli.py plugins
+python promptcompanion_cli.py mcp
 ```
 
 Custom importer packages can register a callable (or an object exposing
@@ -184,6 +186,11 @@ group. The CLI `plugins` command lists discovered extensions.
 The tray menu includes favorite prompt quick-picks and a light/dark theme toggle;
 the selected theme is persisted through the platform settings store. The launch
 preview also surfaces a deterministic prompt of the day.
+
+The `mcp` command speaks newline-delimited JSON-RPC over stdio and exposes
+`search_prompts`, `get_prompt`, and `render_prompt`. Configure an MCP client to
+launch `python promptcompanion_cli.py mcp --db <path-to-prompts.db>`; no GUI or
+network service is required.
 
 ### Git-friendly overlay sync
 
