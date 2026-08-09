@@ -60,10 +60,12 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **Favorites** — star any prompt, browse your favorites collection
 - [x] **History** — recently copied/pasted prompts tracked automatically
 - [x] **System tray** — minimize to tray, stays running in background
-- [x] **Global hotkey** — Win+Shift+P summons window from anywhere (Windows)
+- [x] **Global hotkey** — Win+Shift+P on Windows, Cmd/Ctrl+Shift+P on macOS/Linux (pynput backend)
 - [x] **Paste-to-active-window** — copies prompt and pastes into previous window
 - [x] **Export profiles** — Plain Text, Markdown, Front Matter, or JSON copy
 - [x] **Optional provider handoff** — ChatGPT, Claude, or local Ollama URL launch
+- [x] **Portable mode** — place `portable.flag` beside the executable to keep DB/config next to it
+- [x] **GitHub Releases update check** — opt-in background check and Windows self-install scheduling
 - [x] **PyInstaller build** — `python build.py` produces a single `PromptCompanion.exe`
 
 ## Bundled Sources
@@ -152,6 +154,13 @@ Place user `.md` prompts in `~/.promptcompanion/imports/` for the standalone app
 Provider handoff is disabled by default. Set `PROMPTCOMPANION_PROVIDER_HANDOFF=1` before launch to show
 the ChatGPT, Claude, and Ollama handoff menu. Install `tiktoken` locally to use model-aware BPE token
 counts; without it, the app uses a dependency-free estimate.
+
+On macOS and Linux, install the optional `pynput` dependency for the global hotkey backend; desktop
+security/accessibility permissions may be required by the operating system. For a portable build,
+create an empty `portable.flag` beside `PromptCompanion.exe`; the app then reads/writes
+`data/index/prompts.db` and `data/user/` beside the executable. Set `PROMPTCOMPANION_AUTO_UPDATE=1`
+to enable the GitHub Releases check and, in a frozen Windows build, schedule a downloaded update
+for the next application exit.
 
 ## Prompt Record Schema
 

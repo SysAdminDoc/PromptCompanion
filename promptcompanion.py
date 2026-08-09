@@ -26,7 +26,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote  # noqa: E402
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -38,6 +38,11 @@ try:
     import tiktoken
 except ImportError:  # Optional local tokenizer; the dependency-free estimate remains available.
     tiktoken = None
+
+try:
+    from pynput import keyboard as pynput_keyboard
+except ImportError:  # Optional cross-platform global hotkey backend.
+    pynput_keyboard = None
 
 IS_WIN = sys.platform == "win32"
 
@@ -70,18 +75,49 @@ from PyQt6.QtWidgets import (
     QFormLayout, QFrame, QGroupBox, QSystemTrayIcon, QMenu, QStackedWidget,
     QSizePolicy,
 )
+from tools.updater import (  # noqa: E402
+    ReleaseInfo,
+    choose_asset,
+    download_asset,
+    fetch_latest_release,
+    is_newer_version,
+    schedule_windows_install,
+)
 
 
 # -- Paths -----------------------------------------------------------------
-if getattr(sys, "frozen", False):
-    ROOT = Path(sys._MEIPASS)
-    USER_DIR = Path.home() / ".promptcompanion"
-else:
-    ROOT = Path(__file__).resolve().parent
-    USER_DIR = ROOT / "data" / "user"
+def resolve_runtime_paths(
+    is_frozen: bool,
+    executable_dir: Path,
+    bundle_root: Path,
+    portable: bool,
+) -> tuple[Path, Path, Path]:
+    """Resolve bundled resources, user data, and the portable database location."""
+    if not is_frozen:
+        root = bundle_root
+        return root, root / "data" / "user", root / "data" / "index" / "prompts.db"
+    if portable:
+        root = executable_dir
+        portable_db = root / "data" / "index" / "prompts.db"
+        db = portable_db if portable_db.exists() else bundle_root / "data" / "index" / "prompts.db"
+        return root, root / "data" / "user", db
+    return bundle_root, Path.home() / ".promptcompanion", bundle_root / "data" / "index" / "prompts.db"
 
-DB_PATH = ROOT / "data" / "index" / "prompts.db"
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+_SOURCE_ROOT = Path(__file__).resolve().parent
+_EXECUTABLE_DIR = Path(sys.executable).resolve().parent
+PORTABLE_MODE = _env_flag("PROMPTCOMPANION_PORTABLE") or (_EXECUTABLE_DIR / "portable.flag").exists()
+AUTO_UPDATE_ENABLED = _env_flag("PROMPTCOMPANION_AUTO_UPDATE")
+ROOT, USER_DIR, DB_PATH = resolve_runtime_paths(
+    _is_frozen(), _EXECUTABLE_DIR, Path(getattr(sys, "_MEIPASS", _SOURCE_ROOT)), PORTABLE_MODE
+)
 LOGO_PATH = ROOT / "logo.png"
+if not LOGO_PATH.exists() and _is_frozen():
+    LOGO_PATH = Path(getattr(sys, "_MEIPASS", ROOT)) / "logo.png"
 USER_DIR.mkdir(parents=True, exist_ok=True)
 USER_DB_PATH = USER_DIR / "user.db"
 OVERLAY_PATH = USER_DIR / "overlay.jsonl"
@@ -563,24 +599,99 @@ if IS_WIN:
 
 class HotkeyThread(QThread):
     triggered = pyqtSignal()
+    unavailable = pyqtSignal(str)
     def __init__(self):
         super().__init__()
         self._running = True
+        self._listener = None
+
+    @staticmethod
+    def binding_label() -> str:
+        return "Win+Shift+P" if IS_WIN else "Cmd+Shift+P" if sys.platform == "darwin" else "Ctrl+Shift+P"
+
     def run(self):
-        if not IS_WIN:
+        if IS_WIN:
+            user32.RegisterHotKey(None, HOTKEY_ID, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_P)
+            msg = ctypes.wintypes.MSG()
+            while self._running:
+                if user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                    if msg.message == 0x0312 and msg.wParam == HOTKEY_ID:
+                        self.triggered.emit()
+                else:
+                    self.msleep(50)
+            user32.UnregisterHotKey(None, HOTKEY_ID)
             return
-        user32.RegisterHotKey(None, HOTKEY_ID, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_P)
-        msg = ctypes.wintypes.MSG()
-        while self._running:
-            if user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
-                if msg.message == 0x0312 and msg.wParam == HOTKEY_ID:
+        if pynput_keyboard is None:
+            self.unavailable.emit(
+                f"{self.binding_label()} requires optional pynput support on this platform"
+            )
+            return
+        modifier = pynput_keyboard.Key.cmd if sys.platform == "darwin" else pynput_keyboard.Key.ctrl
+        pressed: set[object] = set()
+        fired = False
+
+        def on_press(key):
+            nonlocal fired
+            if not self._running:
+                return False
+            pressed.add(key)
+            char = getattr(key, "char", "")
+            if modifier in pressed and pynput_keyboard.Key.shift in pressed and str(char).lower() == "p":
+                if not fired:
+                    fired = True
                     self.triggered.emit()
-            else:
-                self.msleep(50)
-        user32.UnregisterHotKey(None, HOTKEY_ID)
+
+        def on_release(key):
+            nonlocal fired
+            pressed.discard(key)
+            if str(getattr(key, "char", "")).lower() == "p":
+                fired = False
+
+        try:
+            self._listener = pynput_keyboard.Listener(on_press=on_press, on_release=on_release)
+            self._listener.start()
+            while self._running and self._listener.is_alive():
+                self.msleep(100)
+        except (OSError, RuntimeError) as exc:
+            self.unavailable.emit(f"Global hotkey unavailable: {exc}")
+        finally:
+            if self._listener:
+                self._listener.stop()
+                self._listener = None
+
     def stop(self):
         self._running = False
+        if self._listener:
+            self._listener.stop()
         self.wait(2000)
+
+
+class UpdateThread(QThread):
+    checked = pyqtSignal(object, object, object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, current_version: str, auto_download: bool = False):
+        super().__init__()
+        self.current_version = current_version
+        self.auto_download = auto_download
+
+    def run(self):
+        try:
+            release = fetch_latest_release()
+            if not is_newer_version(self.current_version, release.version):
+                self.checked.emit(release, None, None)
+                return
+            asset = choose_asset(release)
+            downloaded = None
+            if self.auto_download and _is_frozen() and asset and IS_WIN:
+                current = Path(sys.executable).resolve()
+                downloaded = download_asset(
+                    asset.url,
+                    current.with_name(f".{asset.name}.download"),
+                )
+            self.checked.emit(release, asset, downloaded)
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            self.failed.emit(str(exc))
 
 
 PROMPT_FIELDS = (
@@ -2500,6 +2611,7 @@ class MainWindow(QMainWindow):
         self.resize(1340, 820)
         self._prev_hwnd = None
         self._hotkey_thread = None
+        self._update_thread = None
         self._chain_steps: list[dict] = []
         self._chain_values: dict[str, str] = {}
 
@@ -2630,7 +2742,7 @@ class MainWindow(QMainWindow):
 
         # -- Status bar -----------------------------------------------------
         src_count = len(self.db.sources())
-        hotkey_hint = "  |  Win+Shift+P to summon  |  Ctrl+K to search" if IS_WIN else "  |  Ctrl+K to search"
+        hotkey_hint = f"  |  {HotkeyThread.binding_label()} to summon  |  Ctrl+K to search"
         overlay_hint = f"  |  {self.overlay.count():,} local edit{'s' if self.overlay.count() != 1 else ''}" if self.overlay.count() else ""
         import_hint = f"  |  {self._imported_on_launch:,} markdown import{'s' if self._imported_on_launch != 1 else ''} refreshed" if self._imported_on_launch else ""
         self.statusBar().showMessage(f"{self._total:,} prompts from {src_count} sources{overlay_hint}{import_hint}{hotkey_hint}")
@@ -2679,10 +2791,12 @@ class MainWindow(QMainWindow):
         self._current_category = ""
         self._on_filter_changed()
 
-        if IS_WIN:
-            self._hotkey_thread = HotkeyThread()
-            self._hotkey_thread.triggered.connect(self._on_hotkey)
-            self._hotkey_thread.start()
+        self._hotkey_thread = HotkeyThread()
+        self._hotkey_thread.triggered.connect(self._on_hotkey)
+        self._hotkey_thread.unavailable.connect(lambda message: self.statusBar().showMessage(message, 6000))
+        self._hotkey_thread.start()
+        if AUTO_UPDATE_ENABLED:
+            QTimer.singleShot(3000, self._check_for_updates)
 
     def _focus_search(self):
         self.search_input.setFocus()
@@ -2844,6 +2958,9 @@ class MainWindow(QMainWindow):
         show_action = QAction("Show PromptCompanion", self)
         show_action.triggered.connect(self._show_from_tray)
         menu.addAction(show_action)
+        update_action = QAction("Check for Updates", self)
+        update_action.triggered.connect(self._check_for_updates)
+        menu.addAction(update_action)
         menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self._quit_app)
@@ -2851,6 +2968,37 @@ class MainWindow(QMainWindow):
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
+
+    def _check_for_updates(self):
+        if self._update_thread and self._update_thread.isRunning():
+            return
+        self.statusBar().showMessage("Checking GitHub Releases for updates...", 3000)
+        self._update_thread = UpdateThread(VERSION, auto_download=AUTO_UPDATE_ENABLED)
+        self._update_thread.checked.connect(self._on_update_checked)
+        self._update_thread.failed.connect(self._on_update_failed)
+        self._update_thread.start()
+
+    def _on_update_checked(self, release: ReleaseInfo, asset, downloaded):
+        if not is_newer_version(VERSION, release.version):
+            self.statusBar().showMessage(f"PromptCompanion v{VERSION} is up to date", 4000)
+            return
+        if downloaded:
+            try:
+                script = schedule_windows_install(Path(sys.executable), downloaded)
+            except (OSError, RuntimeError, ValueError) as exc:
+                self.statusBar().showMessage(f"Update downloaded but could not schedule install: {exc}", 6000)
+            else:
+                self.statusBar().showMessage(
+                    f"v{release.version} downloaded; quit to install ({script.name})", 6000
+                )
+            return
+        asset_name = asset.name if asset else "no compatible asset"
+        self.statusBar().showMessage(
+            f"PromptCompanion v{release.version} is available ({asset_name})", 6000
+        )
+
+    def _on_update_failed(self, message: str):
+        self.statusBar().showMessage(f"Update check unavailable: {message}", 6000)
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:

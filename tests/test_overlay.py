@@ -38,6 +38,15 @@ from promptcompanion import (
     parse_tag_input,
     recency_boost,
     write_editor_draft,
+    resolve_runtime_paths,
+)
+from tools.updater import (  # noqa: E402
+    ReleaseAsset,
+    ReleaseInfo,
+    choose_asset,
+    download_asset,
+    fetch_latest_release,
+    is_newer_version,
 )
 
 
@@ -259,6 +268,92 @@ class OverlayTests(unittest.TestCase):
         self.assertIn("q=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("ChatGPT", prompt))
         self.assertIn("q=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("Claude", prompt))
         self.assertIn("prompt=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("Ollama", prompt))
+
+    def test_portable_runtime_paths_use_external_database_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable_dir = root / "dist"
+            bundle_root = root / "bundle"
+            portable_db = executable_dir / "data" / "index" / "prompts.db"
+            portable_db.parent.mkdir(parents=True)
+            portable_db.write_bytes(b"portable")
+
+            resolved_root, user_dir, resolved_db = resolve_runtime_paths(
+                True, executable_dir, bundle_root, True
+            )
+
+            self.assertEqual(resolved_root, executable_dir)
+            self.assertEqual(user_dir, executable_dir / "data" / "user")
+            self.assertEqual(resolved_db, portable_db)
+
+    def test_release_helpers_select_assets_and_download_atomically(self):
+        release = ReleaseInfo(
+            "v1.2.0",
+            "1.2.0",
+            "https://github.com/SysAdminDoc/PromptCompanion/releases/tag/v1.2.0",
+            (
+                ReleaseAsset("PromptCompanion.zip", "https://github.com/example/app.zip"),
+                ReleaseAsset("PromptCompanion.exe", "https://github.com/example/app.exe"),
+            ),
+        )
+
+        self.assertTrue(is_newer_version("1.1.9", release.version))
+        self.assertEqual(choose_asset(release, "win32").name, "PromptCompanion.exe")
+
+        class FakeResponse:
+            def __init__(self, payload: bytes):
+                self.payload = payload
+                self.used = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size=-1):
+                if self.used:
+                    return b""
+                self.used = True
+                return self.payload
+
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "PromptCompanion.exe"
+            downloaded = download_asset(
+                "https://github.com/example/app.exe",
+                destination,
+                opener=lambda *_args, **_kwargs: FakeResponse(b"binary"),
+            )
+            self.assertEqual(downloaded, destination)
+            self.assertEqual(destination.read_bytes(), b"binary")
+
+    def test_fetch_latest_release_parses_github_payload(self):
+        payload = json.dumps({
+            "tag_name": "v1.2.0",
+            "html_url": "https://github.com/SysAdminDoc/PromptCompanion/releases/tag/v1.2.0",
+            "assets": [{
+                "name": "PromptCompanion.exe",
+                "browser_download_url": "https://github.com/example/app.exe",
+            }],
+        }).encode("utf-8")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return payload
+
+        release = fetch_latest_release(
+            "https://api.github.com/repos/example/app/releases/latest",
+            opener=lambda *_args, **_kwargs: FakeResponse(),
+        )
+
+        self.assertEqual(release.version, "1.2.0")
+        self.assertEqual(release.assets[0].name, "PromptCompanion.exe")
 
     def test_prompt_includes_expand_from_db_refs(self):
         with tempfile.TemporaryDirectory() as tmp:

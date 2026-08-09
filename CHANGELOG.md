@@ -13,6 +13,7 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 - Persistent collection/category tree expansion state and keyboard-only prompt navigation.
 - Markdown editor drafts and multi-select JSON/Markdown bundle export.
 - Optional ChatGPT/Claude/Ollama URL handoff, local tiktoken token estimates, and model-provider filtering.
+- Portable executable data paths, cross-platform hotkey support, and opt-in GitHub Releases update scheduling.
 
 ## [0.8.1] - 2026-06-28
 
