@@ -162,6 +162,24 @@ create an empty `portable.flag` beside `PromptCompanion.exe`; the app then reads
 to enable the GitHub Releases check and, in a frozen Windows build, schedule a downloaded update
 for the next application exit.
 
+## Headless CLI
+
+Search without launching Qt and copy the best match to the system clipboard:
+
+```bash
+python promptcompanion_cli.py search "code review"
+python promptcompanion_cli.py search "debugging" --category development --no-copy
+python promptcompanion_cli.py plugins
+```
+
+Custom importer packages can register a callable (or an object exposing
+`import_prompts(**options)`) under the `promptcompanion.importers` Python entry-point
+group. The CLI `plugins` command lists discovered extensions.
+
+The tray menu includes favorite prompt quick-picks and a light/dark theme toggle;
+the selected theme is persisted through the platform settings store. The launch
+preview also surfaces a deterministic prompt of the day.
+
 ## Prompt Record Schema
 
 ```json

@@ -136,6 +136,17 @@ C = {
     "peach": "#FAB387", "red": "#F38BA8", "mauve": "#CBA6F7",
     "pink": "#F5C2E7", "flamingo": "#F2CDCD", "rosewater": "#F5E0DC",
 }
+DARK_C = dict(C)
+LIGHT_C = {
+    "base": "#F8F8FC", "mantle": "#EFF0F5", "crust": "#E4E6EE",
+    "surface0": "#E0E3EC", "surface1": "#CDD2E0", "surface2": "#B9C0D2",
+    "overlay0": "#737B94", "overlay1": "#626B85",
+    "subtext0": "#555E78", "subtext1": "#414A65", "text": "#283047",
+    "lavender": "#6C63C7", "blue": "#4C70C7", "sapphire": "#2C83A5",
+    "teal": "#23877F", "green": "#398A4C", "yellow": "#9A6A05",
+    "peach": "#B85E1D", "red": "#B13D59", "mauve": "#884BAF",
+    "pink": "#AA4B8B", "flamingo": "#A45A61", "rosewater": "#A85C58",
+}
 
 # -- Design tokens ---------------------------------------------------------
 # Radius:  6px small (pills, tags)  8px medium (inputs, buttons, cards)  10px large (search)
@@ -519,6 +530,24 @@ QToolTip {{
     font-size: 12px;
 }}
 """
+
+
+def theme_stylesheet(theme: str = "dark") -> str:
+    if theme.casefold() != "light":
+        return STYLESHEET
+    stylesheet = STYLESHEET
+    for key, dark_value in DARK_C.items():
+        stylesheet = stylesheet.replace(dark_value, LIGHT_C[key])
+    return stylesheet
+
+
+def apply_theme(app: QApplication, theme: str) -> str:
+    selected = "light" if theme.casefold() == "light" else "dark"
+    C.clear()
+    C.update(LIGHT_C if selected == "light" else DARK_C)
+    app.setStyleSheet(theme_stylesheet(selected))
+    QSettings("SysAdminDoc", "PromptCompanion").setValue("theme", selected)
+    return selected
 
 VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]{0,63})\s*\}\}")
 INCLUDE_RE = re.compile(r"\{\{\s*include:([a-zA-Z0-9_.:/-]{1,180})\s*\}\}")
@@ -1039,6 +1068,24 @@ def compose_prompt_chain(records: list[dict], values: dict[str, str] | None = No
             "",
         ])
     return "\n".join(lines).strip() + "\n"
+
+
+def prompt_of_day(records: list[dict], day: str | None = None) -> dict | None:
+    """Choose a stable, high-quality daily prompt without mutating the library."""
+    candidates = [record for record in records if not record.get("deprecated")]
+    if not candidates:
+        return None
+    ranked = sorted(
+        candidates,
+        key=lambda record: (
+            -int(record.get("quality") or 0),
+            str(record.get("title", "")).casefold(),
+            str(record.get("id", "")),
+        ),
+    )[:250]
+    day_key = day or datetime.now(timezone.utc).date().isoformat()
+    digest = hashlib.sha256(f"promptcompanion:{day_key}".encode("utf-8")).digest()
+    return ranked[int.from_bytes(digest[:8], "big") % len(ranked)]
 
 
 def make_private_prompt() -> dict:
@@ -2612,6 +2659,7 @@ class MainWindow(QMainWindow):
         self._prev_hwnd = None
         self._hotkey_thread = None
         self._update_thread = None
+        self._tray_favorites_menu = None
         self._chain_steps: list[dict] = []
         self._chain_values: dict[str, str] = {}
 
@@ -2790,6 +2838,12 @@ class MainWindow(QMainWindow):
 
         self._current_category = ""
         self._on_filter_changed()
+        self._daily_prompt = prompt_of_day(self.db.search(limit=5000))
+        if self._daily_prompt:
+            self.preview.show_prompt(self._daily_prompt)
+            self.statusBar().showMessage(
+                f"Prompt of the day: {self._daily_prompt.get('title', 'Untitled Prompt')}", 6000
+            )
 
         self._hotkey_thread = HotkeyThread()
         self._hotkey_thread.triggered.connect(self._on_hotkey)
@@ -2866,6 +2920,7 @@ class MainWindow(QMainWindow):
         )
         if hasattr(self, "search_input"):
             self.search_input.setPlaceholderText(f"Search {self._total:,} prompts...   (Ctrl+K)")
+        self._refresh_tray_favorites()
 
     def _new_private_prompt(self):
         rec = make_private_prompt()
@@ -2891,6 +2946,38 @@ class MainWindow(QMainWindow):
         self._refresh_tree()
         if self._current_category == CAT_FAVORITES:
             self._on_filter_changed()
+
+    def _refresh_tray_favorites(self):
+        if self._tray_favorites_menu is None:
+            return
+        self._tray_favorites_menu.clear()
+        records = self.db.get_by_ids(sorted(self.user_db.favorite_ids()))
+        records.sort(key=lambda record: str(record.get("title", "")).casefold())
+        if not records:
+            empty = QAction("No favorites yet", self)
+            empty.setEnabled(False)
+            self._tray_favorites_menu.addAction(empty)
+            return
+        for record in records:
+            action = QAction(str(record.get("title", "Untitled Prompt")), self)
+            action.setToolTip(str(record.get("category", "")))
+            prompt_id = str(record.get("id", ""))
+            action.triggered.connect(lambda _checked=False, value=prompt_id: self._open_tray_prompt(value))
+            self._tray_favorites_menu.addAction(action)
+
+    def _open_tray_prompt(self, prompt_id: str):
+        records = self.db.get_by_ids([prompt_id])
+        if records:
+            self._show_from_tray()
+            self.preview.show_prompt(records[0])
+
+    def _toggle_theme(self):
+        current = "light" if C["base"] == LIGHT_C["base"] else "dark"
+        selected = apply_theme(QApplication.instance(), "dark" if current == "light" else "light")
+        self._refresh_tree()
+        if self.preview._current:
+            self.preview.show_prompt(self.preview._current)
+        self.statusBar().showMessage(f"Switched to {selected} theme", 3000)
 
     def _on_edit_saved(self, record: dict):
         previous = record.pop("_previous_record", None)
@@ -2958,6 +3045,11 @@ class MainWindow(QMainWindow):
         show_action = QAction("Show PromptCompanion", self)
         show_action.triggered.connect(self._show_from_tray)
         menu.addAction(show_action)
+        self._tray_favorites_menu = menu.addMenu("Favorite Prompts")
+        self._refresh_tray_favorites()
+        theme_action = QAction("Toggle Light/Dark Theme", self)
+        theme_action.triggered.connect(self._toggle_theme)
+        menu.addAction(theme_action)
         update_action = QAction("Check for Updates", self)
         update_action.triggered.connect(self._check_for_updates)
         menu.addAction(update_action)
@@ -3154,7 +3246,8 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setStyleSheet(STYLESHEET)
+    saved_theme = str(QSettings("SysAdminDoc", "PromptCompanion").value("theme", "dark"))
+    apply_theme(app, saved_theme)
     app.setQuitOnLastWindowClosed(False)
     if LOGO_PATH.exists():
         app.setWindowIcon(QIcon(str(LOGO_PATH)))

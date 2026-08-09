@@ -14,6 +14,7 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 - Markdown editor drafts and multi-select JSON/Markdown bundle export.
 - Optional ChatGPT/Claude/Ollama URL handoff, local tiktoken token estimates, and model-provider filtering.
 - Portable executable data paths, cross-platform hotkey support, and opt-in GitHub Releases update scheduling.
+- Favorite quick-picks in the tray, deterministic prompt of the day, headless CLI search, importer plugins, and theme switching.
 
 ## [0.8.1] - 2026-06-28
 

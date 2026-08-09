@@ -32,11 +32,13 @@ from promptcompanion import (
     markdown_file_record,
     model_compatible,
     model_provider,
+    prompt_of_day,
     provider_handoff_url,
     set_variable_preset,
     variable_preset_map,
     parse_tag_input,
     recency_boost,
+    theme_stylesheet,
     write_editor_draft,
     resolve_runtime_paths,
 )
@@ -48,6 +50,8 @@ from tools.updater import (  # noqa: E402
     fetch_latest_release,
     is_newer_version,
 )
+from tools.plugins import discover_importers, run_importer  # noqa: E402
+from promptcompanion_cli import search_prompts  # noqa: E402
 
 
 SCHEMA = """
@@ -70,6 +74,7 @@ CREATE TABLE prompts (
     translator TEXT NOT NULL DEFAULT '',
     version INTEGER NOT NULL,
     quality INTEGER NOT NULL DEFAULT 0,
+    deprecated INTEGER NOT NULL DEFAULT 0,
     created TEXT NOT NULL,
     updated TEXT NOT NULL
 );
@@ -268,6 +273,61 @@ class OverlayTests(unittest.TestCase):
         self.assertIn("q=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("ChatGPT", prompt))
         self.assertIn("q=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("Claude", prompt))
         self.assertIn("prompt=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("Ollama", prompt))
+
+    def test_prompt_of_day_is_stable_and_skips_deprecated_records(self):
+        records = [
+            {"id": "old", "title": "Old", "body": "Old", "quality": 100, "deprecated": True},
+            {"id": "one", "title": "One", "body": "One", "quality": 80},
+            {"id": "two", "title": "Two", "body": "Two", "quality": 70},
+        ]
+
+        first = prompt_of_day(records, day="2026-08-09")
+        second = prompt_of_day(records, day="2026-08-09")
+
+        self.assertEqual(first, second)
+        self.assertIn(first["id"], {"one", "two"})
+
+    def test_light_theme_stylesheet_replaces_dark_surface_colors(self):
+        light = theme_stylesheet("light")
+        dark = theme_stylesheet("dark")
+
+        self.assertIn("#F8F8FC", light)
+        self.assertIn("#1E1E2E", dark)
+        self.assertNotEqual(light, dark)
+
+    def test_cli_search_uses_the_same_fts_index_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "prompts.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(SCHEMA)
+            insert_prompt(conn, "demo-one", "CLI title", "CLI searchable body")
+            conn.close()
+
+            results = search_prompts(db_path, "searchable", limit=1)
+
+            self.assertEqual([record["id"] for record in results], ["demo-one"])
+
+    def test_plugin_entry_points_load_callable_and_object_plugins(self):
+        class Entry:
+            def __init__(self, name, loaded):
+                self.name = name
+                self.loaded = loaded
+
+            def load(self):
+                return self.loaded
+
+        class Entries:
+            def select(self, **_kwargs):
+                return [
+                    Entry("callable", lambda **options: options["value"] + 1),
+                    Entry("object", type("Plugin", (), {"import_prompts": lambda self, **kwargs: kwargs["value"] * 2})()),
+                ]
+
+        discovered = discover_importers(Entries())
+
+        self.assertEqual(set(discovered), {"callable", "object"})
+        self.assertEqual(run_importer("callable", {"value": 2}, Entries()), 3)
+        self.assertEqual(run_importer("object", {"value": 2}, Entries()), 4)
 
     def test_portable_runtime_paths_use_external_database_when_present(self):
         with tempfile.TemporaryDirectory() as tmp:
