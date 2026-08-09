@@ -232,39 +232,89 @@ def dedupe_by_body(prompts_dir: Path | None = None) -> int:
 
 _STRUCTURE_RE = re.compile(r"^(#{1,4}\s|[0-9]+\.\s|- |\* )", re.MULTILINE)
 _EXAMPLE_RE = re.compile(r"(?i)(example|sample|output|response)\s*[:\n]")
+_OBSOLETE_MODEL_RE = re.compile(
+    r"(?i)(?:^|[-_ ])(?:text-davinci|davinci|curie|babbage|ada|gpt-3\.5|"
+    r"gpt-4-0314|gpt-4-32k|claude-1|claude-2|gemini-1\.0|palm)"
+)
+_AUTHOR_RANKS = {
+    "awesome": 82,
+    "bigprompt": 78,
+    "sysprompt": 76,
+    "llmprompt": 72,
+    "chatsys": 68,
+    "devprompts": 74,
+    "chatgptlib": 70,
+}
+DEPRECATION_STALE_DAYS = 365
+
+
+def _bounded_number(value, low: float, high: float, fallback: float) -> float:
+    try:
+        return max(low, min(high, float(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _source_key(record: dict) -> str:
+    prompt_id = str(record.get("id", ""))
+    if "-" in prompt_id:
+        return prompt_id.split("-", 1)[0]
+    source = str(record.get("source", "")).rstrip("/")
+    return source.rsplit("/", 1)[-1].casefold()
+
+
+def _author_rank(record: dict) -> float:
+    explicit = record.get("author_rank")
+    if explicit is not None:
+        return _bounded_number(explicit, 0, 100, 50)
+    return _AUTHOR_RANKS.get(_source_key(record), 50)
+
+
+def _review_signal(record: dict) -> float:
+    """Return a 0-15 review signal with a neutral prior for unreviewed records."""
+    raw_score = record.get("review_score", record.get("review_vote"))
+    if raw_score is None:
+        return 7.5
+    score = _bounded_number(raw_score, 0, 5, 2.5) / 5
+    try:
+        votes = max(0, int(record.get("review_votes") or 0))
+    except (TypeError, ValueError):
+        votes = 0
+    confidence = min(1.0, votes / 5) if votes else 0.5
+    return 15 * ((1 - confidence) * 0.5 + confidence * score)
 
 
 def score_quality(rec: dict) -> int:
-    """Heuristic quality score for a prompt record. Returns 0-100."""
+    """Score a prompt using content, provenance, and optional review signals."""
     body = rec.get("body", "")
     title = rec.get("title", "")
     score = 0
 
-    # --- Body length (0-25) ---
+    # --- Body length (0-20) ---
     blen = len(body)
     if blen < 80:
-        score += 5
+        score += 4
     elif blen < 200:
-        score += 12
+        score += 10
     elif blen < 800:
-        score += 25
-    elif blen < 3000:
         score += 20
+    elif blen < 3000:
+        score += 16
     else:
-        score += 15  # very long can be noisy
+        score += 12  # very long can be noisy
 
-    # --- Has structure: headers, numbered lists, bullets (0-20) ---
+    # --- Has structure: headers, numbered lists, bullets (0-15) ---
     structure_matches = len(_STRUCTURE_RE.findall(body))
     if structure_matches >= 5:
-        score += 20
-    elif structure_matches >= 2:
-        score += 14
-    elif structure_matches >= 1:
-        score += 8
-
-    # --- Has example/sample output (0-15) ---
-    if _EXAMPLE_RE.search(body):
         score += 15
+    elif structure_matches >= 2:
+        score += 11
+    elif structure_matches >= 1:
+        score += 6
+
+    # --- Has example/sample output (0-10) ---
+    if _EXAMPLE_RE.search(body):
+        score += 10
 
     # --- Has variables / template placeholders (0-10) ---
     variables = rec.get("variables", [])
@@ -273,24 +323,28 @@ def score_quality(rec: dict) -> int:
     elif len(variables) >= 1:
         score += 6
 
-    # --- Title quality (0-10) ---
+    # --- Title quality (0-7) ---
     if 5 < len(title) < 100:
-        score += 7
+        score += 5
     if title[0].isupper() if title else False:
-        score += 3
+        score += 2
 
-    # --- Tags present (0-5) ---
+    # --- Tags present (0-4) ---
     tags = rec.get("tags", [])
     if len(tags) >= 3:
-        score += 5
+        score += 4
     elif len(tags) >= 1:
-        score += 3
+        score += 2
 
-    # --- Clear role assignment (0-5) ---
+    # --- Clear role assignment (0-4) ---
     if rec.get("role") == "system":
-        score += 5
+        score += 4
     elif rec.get("role") == "user":
-        score += 3
+        score += 2
+
+    # --- Provenance and review (0-30) ---
+    score += round(_author_rank(rec) * 15 / 100)
+    score += round(_review_signal(rec))
 
     # --- Penalty: jailbreak / ignore-instructions patterns (0 to -10) ---
     body_lower = body[:500].lower()
@@ -320,6 +374,63 @@ def apply_quality_scores(prompts_dir: Path | None = None) -> int:
         if changed:
             write_jsonl(jsonl_path, records)
     return total
+
+
+def deprecation_reasons(rec: dict, now: datetime | None = None) -> list[str]:
+    """Return deterministic reasons a prompt should be flagged as deprecated."""
+    reasons: list[str] = []
+
+    models = [str(model).strip() for model in rec.get("target_models", []) if str(model).strip()]
+    obsolete = [model for model in models if _OBSOLETE_MODEL_RE.search(model)]
+    if obsolete:
+        reasons.append("targets obsolete model(s): " + ", ".join(sorted(set(obsolete))))
+
+    updated = str(rec.get("updated") or rec.get("created") or "").strip()
+    if updated:
+        try:
+            timestamp = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            current = now or datetime.now(timezone.utc)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            age_days = (current - timestamp).days
+            if age_days >= DEPRECATION_STALE_DAYS:
+                reasons.append(f"not updated in {age_days} days")
+        except ValueError:
+            pass
+    if rec.get("deprecated"):
+        existing = str(rec.get("deprecation_reason") or "marked by curator")
+        auto_parts = {part.strip() for reason in reasons for part in reason.split("; ")}
+        if existing != "marked by curator" and not all(
+            part in auto_parts for part in existing.split("; ")
+        ):
+            reasons.insert(0, existing)
+        elif not reasons:
+            reasons.append(existing)
+    return list(dict.fromkeys(reasons))
+
+
+def apply_deprecation_flags(prompts_dir: Path | None = None, now: datetime | None = None) -> int:
+    """Persist deprecation flags and reasons; return the number of changed records."""
+    prompts_dir = prompts_dir or PROMPTS_DIR
+    changed_count = 0
+    for jsonl_path in sorted(prompts_dir.glob("*.jsonl")):
+        records = read_jsonl(jsonl_path)
+        changed = False
+        for rec in records:
+            reasons = deprecation_reasons(rec, now=now)
+            deprecated = bool(reasons)
+            reason = "; ".join(reasons)
+            if rec.get("deprecated", False) != deprecated or rec.get("deprecation_reason", "") != reason:
+                rec["deprecated"] = deprecated
+                if reason:
+                    rec["deprecation_reason"] = reason
+                else:
+                    rec.pop("deprecation_reason", None)
+                changed = True
+                changed_count += 1
+        if changed:
+            write_jsonl(jsonl_path, records)
+    return changed_count
 
 
 def build_record(

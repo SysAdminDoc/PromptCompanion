@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 import promptcompanion
 from tools.validate import validate_translation_links
+from tools._common import apply_deprecation_flags, deprecation_reasons, score_quality
 from promptcompanion import (
     compose_prompt_chain,
     OverlayStore,
@@ -31,6 +32,7 @@ from promptcompanion import (
     set_variable_preset,
     variable_preset_map,
     parse_tag_input,
+    recency_boost,
 )
 
 
@@ -115,6 +117,69 @@ def insert_prompt(
 
 
 class OverlayTests(unittest.TestCase):
+    def test_quality_v2_uses_author_and_review_signals(self):
+        base = {
+            "id": "awesome-demo",
+            "title": "Useful Prompt",
+            "body": "# Task\n\n1. Do the work.\n2. Show an example output.",
+            "variables": [{"name": "topic"}],
+            "tags": ["drafting", "review"],
+            "role": "user",
+        }
+        reviewed = {
+            **base,
+            "author_rank": 100,
+            "review_score": 5,
+            "review_votes": 5,
+        }
+
+        self.assertGreater(score_quality(reviewed), score_quality(base))
+        self.assertLessEqual(score_quality(reviewed), 100)
+
+    def test_recency_boost_is_bounded_and_prefers_newer_records(self):
+        now = promptcompanion.datetime(2026, 8, 9, tzinfo=promptcompanion.timezone.utc)
+        newer = recency_boost("2026-08-01T00:00:00Z", now=now)
+        older = recency_boost("2025-08-01T00:00:00Z", now=now)
+
+        self.assertGreater(newer, older)
+        self.assertGreaterEqual(newer, 0.0)
+        self.assertLessEqual(newer, 1.0)
+        self.assertEqual(recency_boost("not-a-date", now=now), 0.0)
+
+    def test_deprecation_flags_obsolete_models_and_stale_records(self):
+        now = promptcompanion.datetime(2026, 8, 9, tzinfo=promptcompanion.timezone.utc)
+        record = {
+            "id": "demo",
+            "target_models": ["gpt-3.5-turbo"],
+            "updated": "2025-01-01T00:00:00Z",
+        }
+
+        reasons = deprecation_reasons(record, now=now)
+
+        self.assertTrue(any("obsolete model" in reason for reason in reasons))
+        self.assertTrue(any("not updated" in reason for reason in reasons))
+
+    def test_apply_deprecation_flags_persists_only_changed_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "writing.jsonl"
+            path.write_text(
+                json.dumps({
+                    "id": "demo",
+                    "title": "Demo",
+                    "body": "Body",
+                    "target_models": ["gpt-3.5-turbo"],
+                    "updated": "2025-01-01T00:00:00Z",
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            now = promptcompanion.datetime(2026, 8, 9, tzinfo=promptcompanion.timezone.utc)
+            self.assertEqual(apply_deprecation_flags(Path(tmp), now=now), 1)
+            flagged = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(flagged["deprecated"])
+            self.assertIn("obsolete model", flagged["deprecation_reason"])
+            self.assertEqual(apply_deprecation_flags(Path(tmp), now=now), 0)
+
     def test_extract_variables_preserves_first_seen_order(self):
         self.assertEqual(
             extract_variables("Hello {{ name }} and {{topic}} then {{name}}"),

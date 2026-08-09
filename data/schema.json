@@ -148,12 +148,33 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 100,
-      "description": "Optional curator quality score (0-100). Reserved for v0.1.x."
+      "description": "Optional curator quality score (0-100), calculated from content, provenance, and review signals."
+    },
+    "author_rank": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Optional curator rank for the prompt author or upstream source."
+    },
+    "review_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Optional aggregate review score on a five-point scale."
+    },
+    "review_votes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional number of reviews contributing to review_score."
     },
     "deprecated": {
       "type": "boolean",
       "default": false,
       "description": "Marked true when a prompt is outdated or superseded but preserved for history."
+    },
+    "deprecation_reason": {
+      "type": "string",
+      "description": "Optional reason explaining why a prompt is deprecated."
     },
     "notes": {
       "type": "string",

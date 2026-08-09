@@ -44,6 +44,11 @@ CREATE TABLE prompts (
     translator    TEXT NOT NULL DEFAULT '',
     version       INTEGER NOT NULL,
     quality       INTEGER NOT NULL DEFAULT 0,
+    author_rank   INTEGER NOT NULL DEFAULT 50,
+    review_score  REAL,
+    review_votes  INTEGER NOT NULL DEFAULT 0,
+    deprecated    INTEGER NOT NULL DEFAULT 0,
+    deprecation_reason TEXT NOT NULL DEFAULT '',
     created       TEXT NOT NULL,
     updated       TEXT NOT NULL
 );
@@ -111,8 +116,9 @@ def main() -> int:
                     (id, title, body, role, category, tags, variables,
                      target_models, language, source, author, license,
                      translation_of, translated_from, translator,
-                     version, quality, created, updated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     version, quality, author_rank, review_score, review_votes,
+                     deprecated, deprecation_reason, created, updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         r["id"],
@@ -132,6 +138,11 @@ def main() -> int:
                         r.get("translator") or "",
                         r["version"],
                         r.get("quality", 0),
+                        r.get("author_rank", 50),
+                        r.get("review_score"),
+                        r.get("review_votes", 0),
+                        int(bool(r.get("deprecated", False))),
+                        r.get("deprecation_reason") or "",
                         r["created"],
                         r["updated"],
                     ),

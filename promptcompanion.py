@@ -541,7 +541,8 @@ PROMPT_FIELDS = (
     "id", "title", "body", "role", "category", "tags", "variables",
     "target_models", "language", "source", "author", "license",
     "translation_of", "translated_from", "translator", "version",
-    "quality", "created", "updated",
+    "quality", "author_rank", "review_score", "review_votes", "deprecated",
+    "deprecation_reason", "created", "updated",
 )
 PROMPT_EXTRA_FIELDS = (
     "private", "notes", "local_tags", "variable_presets", "history",
@@ -787,6 +788,19 @@ def estimate_token_count(text: str) -> int:
     if not text.strip():
         return 0
     return len(TOKEN_RE.findall(text))
+
+
+def recency_boost(updated: str, now: datetime | None = None, half_life_days: int = 180) -> float:
+    """Return a bounded recency score used to break BM25 ties."""
+    try:
+        timestamp = datetime.fromisoformat(str(updated).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return 0.0
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    age_days = max(0.0, (current - timestamp).total_seconds() / 86400)
+    return 1.0 / (1.0 + age_days / max(1, half_life_days))
 
 
 def format_prompt_stats(text: str) -> str:
@@ -1149,7 +1163,8 @@ class PromptDB:
             "rowid", "id", "title", "body", "role", "category", "tags",
             "variables", "target_models", "language", "source", "author",
             "license", "translation_of", "translated_from", "translator",
-            "version", "quality", "created", "updated",
+            "version", "quality", "author_rank", "review_score", "review_votes",
+            "deprecated", "deprecation_reason", "created", "updated",
         ]
         select_parts = []
         for field in fields:
@@ -1167,6 +1182,7 @@ class PromptDB:
         min_quality: int,
         source: str,
         language: str,
+        include_deprecated: bool = False,
     ) -> bool:
         if category == CAT_PRIVATE:
             if not rec.get("private"):
@@ -1180,6 +1196,8 @@ class PromptDB:
         if source and not str(rec.get("id", "")).startswith(f"{source}-"):
             return False
         if language and rec.get("language") != language:
+            return False
+        if not include_deprecated and rec.get("deprecated"):
             return False
         return True
 
@@ -1223,7 +1241,7 @@ class PromptDB:
 
     def search(self, query: str = "", category: str = "", role: str = "",
                min_quality: int = 0, source: str = "", language: str = "",
-               limit: int = 500) -> list[dict]:
+               include_deprecated: bool = False, limit: int = 500) -> list[dict]:
         fts_active = False
         conditions: list[str] = []
         params: list = []
@@ -1251,6 +1269,8 @@ class PromptDB:
         if language:
             conditions.append("p.language = ?")
             params.append(language)
+        if not include_deprecated and "deprecated" in self.prompt_columns:
+            conditions.append("COALESCE(p.deprecated, 0) = 0")
 
         where_extra = f"AND {' AND '.join(conditions)}" if conditions else ""
 
@@ -1258,7 +1278,8 @@ class PromptDB:
             params.append(limit)
             sql = f"""
                 SELECT {self._select_sql('p')},
-                       bm25(prompts_fts, 10.0, 1.0, 5.0, 2.0) AS rank
+                       bm25(prompts_fts, 10.0, 1.0, 5.0, 2.0)
+                       - 0.15 * (1.0 / (1.0 + MAX(0.0, julianday('now') - julianday(p.updated)) / 180.0)) AS rank
                 FROM prompts p
                 JOIN prompts_fts ON p.rowid = prompts_fts.rowid
                 WHERE prompts_fts MATCH ? {where_extra}
@@ -1270,7 +1291,7 @@ class PromptDB:
             if self.overlay:
                 results = [
                     r for r in results
-                    if self._matches_filters(r, category, role, min_quality, source, language)
+                    if self._matches_filters(r, category, role, min_quality, source, language, include_deprecated)
                     and self._matches_query(r, query)
                 ]
                 seen = {r["id"] for r in results}
@@ -1282,7 +1303,7 @@ class PromptDB:
                     )
                     if not rec:
                         continue
-                    if self._matches_filters(rec, category, role, min_quality, source, language) and self._matches_query(rec, query):
+                    if self._matches_filters(rec, category, role, min_quality, source, language, include_deprecated) and self._matches_query(rec, query):
                         results.append(rec)
             return results[:limit]
 
@@ -1291,7 +1312,7 @@ class PromptDB:
             records = self.overlay.apply_many(records)
         results = [
             rec for rec in records
-            if self._matches_filters(rec, category, role, min_quality, source, language)
+            if self._matches_filters(rec, category, role, min_quality, source, language, include_deprecated)
         ]
         results.sort(key=lambda r: (-int(r.get("quality") or 0), str(r.get("title", "")).casefold()))
         return results[:limit]
