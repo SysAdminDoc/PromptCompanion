@@ -9,6 +9,7 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 ### Added
 - Opt-in, dependency-free local tag suggestions for every importer via `--auto-tags`.
 - `tools/auto_tag.py` for previewing or applying bounded taxonomy suggestions to existing JSONL data.
+- Git-friendly overlay sync with deterministic JSONL bundles, version-aware merges, and conflict detection.
 
 ## [0.9.0] - 2026-08-09
 

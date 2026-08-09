@@ -64,6 +64,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **Paste-to-active-window** — copies prompt and pastes into previous window
 - [x] **Export profiles** — Plain Text, Markdown, Front Matter, or JSON copy
 - [x] **Optional provider handoff** — ChatGPT, Claude, or local Ollama URL launch
+- [x] **Git-friendly overlay sync** — version-aware JSONL export/import with conflict detection
 - [x] **Portable mode** — place `portable.flag` beside the executable to keep DB/config next to it
 - [x] **GitHub Releases update check** — opt-in background check and Windows self-install scheduling
 - [x] **PyInstaller build** — `python build.py` produces a single `PromptCompanion.exe`
@@ -183,6 +184,19 @@ group. The CLI `plugins` command lists discovered extensions.
 The tray menu includes favorite prompt quick-picks and a light/dark theme toggle;
 the selected theme is persisted through the platform settings store. The launch
 preview also surfaces a deterministic prompt of the day.
+
+### Git-friendly overlay sync
+
+Keep local edits in a Git-managed directory without changing the bundled library:
+
+```bash
+python promptcompanion_cli.py sync export --directory ../promptcompanion-sync
+git add ../promptcompanion-sync && git commit -m "Sync prompt edits"
+python promptcompanion_cli.py sync import --directory ../promptcompanion-sync
+```
+
+Imports use record versions and refuse same-version divergent edits. Private
+prompts are excluded unless `--include-private` is supplied.
 
 ## Prompt Record Schema
 

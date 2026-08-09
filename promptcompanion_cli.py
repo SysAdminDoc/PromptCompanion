@@ -13,6 +13,13 @@ import sys
 from pathlib import Path
 
 from tools.plugins import discover_importers
+from tools.sync import (
+    SyncError,
+    export_bundle,
+    import_bundle,
+    merge_overlay,
+    overlay_records,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -93,6 +100,28 @@ def main(argv: list[str] | None = None) -> int:
     search_parser.add_argument("--no-copy", action="store_false", dest="copy")
 
     subparsers.add_parser("plugins", help="List installed custom importer plugins")
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Export or import a Git-friendly local overlay bundle",
+    )
+    sync_parser.add_argument("action", choices=("export", "import", "status"))
+    sync_parser.add_argument(
+        "--directory",
+        type=Path,
+        required=True,
+        help="Directory containing the Git-managed PromptCompanion bundle",
+    )
+    sync_parser.add_argument(
+        "--overlay",
+        type=Path,
+        default=ROOT / "data" / "user" / "overlay.jsonl",
+        help="Local overlay JSONL path",
+    )
+    sync_parser.add_argument(
+        "--include-private",
+        action="store_true",
+        help="Include private records in export/import operations",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "plugins":
@@ -100,6 +129,51 @@ def main(argv: list[str] | None = None) -> int:
         for name in sorted(plugins):
             print(name)
         return 0
+
+    if args.command == "sync":
+        try:
+            if args.action == "export":
+                count = export_bundle(
+                    overlay_records(args.overlay),
+                    args.directory,
+                    include_private=args.include_private,
+                )
+                print(f"Exported {count} records to {args.directory}")
+                return 0
+            if args.action == "import":
+                incoming = import_bundle(args.directory, include_private=args.include_private)
+                result = merge_overlay(
+                    args.overlay,
+                    incoming,
+                    include_private=args.include_private,
+                )
+                if result.conflicts:
+                    print(
+                        "Conflicts (same id/version/timestamp): "
+                        + ", ".join(result.conflicts),
+                        file=sys.stderr,
+                    )
+                    return 2
+                print(f"Imported {result.changed} records ({result.skipped} unchanged/skipped)")
+                return 0
+
+            local = {_record["id"]: _record for _record in overlay_records(args.overlay)}
+            remote = {
+                _record["id"]: _record
+                for _record in import_bundle(args.directory, include_private=args.include_private)
+            }
+            same = sum(1 for prompt_id in local.keys() & remote.keys() if local[prompt_id] == remote[prompt_id])
+            print(json.dumps({
+                "local_records": len(local),
+                "bundle_records": len(remote),
+                "local_only": len(local.keys() - remote.keys()),
+                "bundle_only": len(remote.keys() - local.keys()),
+                "identical": same,
+            }, indent=2))
+            return 0
+        except (OSError, SyncError, json.JSONDecodeError) as exc:
+            print(f"Sync failed: {exc}", file=sys.stderr)
+            return 2
 
     results = search_prompts(args.db, args.query, args.category, args.limit)
     if not results:

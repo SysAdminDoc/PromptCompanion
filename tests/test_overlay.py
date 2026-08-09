@@ -58,6 +58,7 @@ from tools.updater import (  # noqa: E402
 )
 from tools.plugins import discover_importers, run_importer  # noqa: E402
 from promptcompanion_cli import search_prompts  # noqa: E402
+from tools.sync import export_bundle, import_bundle, merge_overlay  # noqa: E402
 
 
 SCHEMA = """
@@ -342,6 +343,46 @@ class OverlayTests(unittest.TestCase):
             results = search_prompts(db_path, "searchable", limit=1)
 
             self.assertEqual([record["id"] for record in results], ["demo-one"])
+
+    def test_sync_bundle_round_trip_is_private_opt_in_and_conflict_safe(self):
+        public = {
+            "id": "demo-public",
+            "title": "Public",
+            "body": "Keep this prompt synced.",
+            "version": 1,
+            "updated": "2026-08-01T00:00:00Z",
+        }
+        private = {
+            "id": "demo-private",
+            "title": "Private",
+            "body": "Keep this local.",
+            "version": 1,
+            "updated": "2026-08-01T00:00:00Z",
+            "private": True,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            overlay = root / "overlay.jsonl"
+            bundle = root / "sync"
+            overlay.write_text(
+                json.dumps(public) + "\n" + json.dumps(private) + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(export_bundle([public, private], bundle), 1)
+            self.assertEqual([record["id"] for record in import_bundle(bundle)], ["demo-public"])
+            self.assertEqual(export_bundle([public, private], bundle, include_private=True), 2)
+
+            conflict = dict(public, body="Different same-version edit")
+            result = merge_overlay(overlay, [conflict])
+            self.assertEqual(result.conflicts, ("demo-public",))
+            self.assertIn("Keep this prompt synced.", overlay.read_text(encoding="utf-8"))
+
+            update = dict(public, body="Newer edit", version=2)
+            result = merge_overlay(overlay, [update])
+            self.assertEqual(result.changed, 1)
+            self.assertIn("Newer edit", overlay.read_text(encoding="utf-8"))
 
     def test_plugin_entry_points_load_callable_and_object_plugins(self):
         class Entry:
