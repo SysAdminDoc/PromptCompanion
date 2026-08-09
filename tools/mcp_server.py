@@ -19,7 +19,7 @@ from typing import TextIO
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = ROOT / "data" / "index" / "prompts.db"
 MCP_PROTOCOL_VERSION = "2024-11-05"
-SERVER_VERSION = "0.9.0"
+SERVER_VERSION = "1.0.0"
 _INCLUDE_RE = re.compile(r"\{\{\s*include:([a-zA-Z0-9_.:/-]{1,180})\s*\}\}")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
