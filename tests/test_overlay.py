@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 import promptcompanion
 from tools.validate import validate_translation_links
-from tools._common import apply_deprecation_flags, deprecation_reasons, score_quality
+from tools._common import apply_deprecation_flags, deprecation_reasons, score_quality  # noqa: E402
 from promptcompanion import (
     compose_prompt_chain,
     OverlayStore,
@@ -23,6 +23,7 @@ from promptcompanion import (
     estimate_token_count,
     expand_prompt_includes,
     export_markdown_front_matter,
+    export_prompt_bundle,
     extract_variables,
     fill_prompt_body,
     format_prompt_stats,
@@ -33,6 +34,7 @@ from promptcompanion import (
     variable_preset_map,
     parse_tag_input,
     recency_boost,
+    write_editor_draft,
 )
 
 
@@ -191,6 +193,45 @@ class OverlayTests(unittest.TestCase):
             parse_tag_input("Review, Drafting; review  Needs polish!"),
             ["review", "drafting", "needs", "polish"],
         )
+
+    def test_export_prompt_bundle_supports_json_and_markdown(self):
+        records = [{
+            "id": "demo-one",
+            "title": "Demo One",
+            "body": "Write about {{topic}}.",
+            "role": "user",
+            "category": "writing",
+            "language": "en",
+            "tags": '["drafting"]',
+            "variables": "[]",
+            "target_models": '["any"]',
+            "_overlay": True,
+        }]
+
+        json_bundle = export_prompt_bundle(records, "JSON")
+        markdown_bundle = export_prompt_bundle(records, "Markdown")
+
+        self.assertIn('"prompts"', json_bundle)
+        self.assertIn('"tags": [\n        "drafting"', json_bundle)
+        self.assertNotIn("_overlay", json_bundle)
+        self.assertIn("# Prompt Bundle", markdown_bundle)
+        self.assertIn("## 1. Demo One", markdown_bundle)
+        self.assertIn("Write about {{topic}}.", markdown_bundle)
+
+    def test_write_editor_draft_uses_stable_atomic_markdown_path(self):
+        record = {
+            "id": "demo-one",
+            "title": "Demo One",
+            "body": "Body",
+            "role": "user",
+            "category": "writing",
+            "language": "en",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_editor_draft(record, "Body", Path(tmp))
+
+            self.assertEqual(path.name, "demo-one.md")
+            self.assertIn("# Demo One", path.read_text(encoding="utf-8"))
 
     def test_prompt_stats_format_counts_characters_and_estimated_tokens(self):
         text = "Hello, world!\nShip v0.7.3."

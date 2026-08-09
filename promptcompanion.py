@@ -55,8 +55,8 @@ def _bootstrap(packages: list[str]) -> None:
 
 _bootstrap(["PyQt6"])
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QSize
-from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QIcon, QAction, QShortcut, QKeySequence
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QSettings, QUrl
+from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QIcon, QAction, QShortcut, QKeySequence, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QSplitter,
@@ -548,6 +548,8 @@ PROMPT_EXTRA_FIELDS = (
     "private", "notes", "local_tags", "variable_presets", "history",
     "import_path", "import_sha256",
 )
+TREE_SETTINGS_KEY = "category_tree/expanded"
+EDITOR_EXPORT_DIR = USER_DIR / "editor"
 PRIVATE_ENCRYPTION_ENV = "PROMPTCOMPANION_PRIVATE_PASSPHRASE"
 PRIVATE_ENCRYPTION_SCHEME = "fernet-pbkdf2-sha256-v1"
 PRESET_SAFE = "Safe defaults"
@@ -805,6 +807,49 @@ def recency_boost(updated: str, now: datetime | None = None, half_life_days: int
 
 def format_prompt_stats(text: str) -> str:
     return f"{len(text):,} chars / ~{estimate_token_count(text):,} tokens"
+
+
+def export_prompt_bundle(records: list[dict], format_name: str = "Markdown") -> str:
+    """Serialize selected prompt records as one JSON or Markdown bundle."""
+    normalized: list[dict] = []
+    for record in records:
+        item = dict(record)
+        for key in ("tags", "variables", "target_models"):
+            item[key] = parse_json_list(item.get(key))
+        for key in ("_overlay", "_overlay_updated", "private"):
+            item.pop(key, None)
+        normalized.append(item)
+    if format_name.casefold() == "json":
+        return json.dumps({"prompts": normalized}, indent=2, ensure_ascii=False)
+
+    lines = ["# Prompt Bundle", ""]
+    for index, record in enumerate(normalized, start=1):
+        lines.extend([
+            f"## {index}. {record.get('title', 'Untitled Prompt')}",
+            "",
+            "  /  ".join([
+                f"Role: {record.get('role', 'user')}",
+                f"Category: {str(record.get('category', 'uncategorized')).replace('_', ' ').title()}",
+                f"Language: {record.get('language', 'en')}",
+            ]),
+            "",
+            str(record.get("body", "")).strip(),
+            "",
+            "---",
+            "",
+        ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_editor_draft(record: dict, body: str, directory: Path = EDITOR_EXPORT_DIR) -> Path:
+    """Write an atomic Markdown draft and return its stable path."""
+    directory.mkdir(parents=True, exist_ok=True)
+    prompt_id = slugify_ref(record.get("id") or record.get("title") or "prompt") or "prompt"
+    path = directory / f"{prompt_id}.md"
+    tmp = path.with_suffix(".md.tmp")
+    tmp.write_text(export_markdown(record, body), encoding="utf-8", newline="\n")
+    tmp.replace(path)
+    return path
 
 
 def compose_prompt_chain(records: list[dict], values: dict[str, str] | None = None, include_resolver=None) -> str:
@@ -1507,15 +1552,17 @@ class EmptyState(QWidget):
 # -- Category tree ----------------------------------------------------------
 class CategoryTree(QTreeView):
     category_selected = pyqtSignal(str)
+    search_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setHeaderHidden(True)
-        self.setRootIsDecorated(False)
+        self.setRootIsDecorated(True)
         self.setFixedWidth(220)
         self.setAlternatingRowColors(False)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self.setIndentation(0)
+        self.setIndentation(12)
+        self._settings = QSettings("SysAdminDoc", "PromptCompanion")
         self._model = QStandardItemModel()
         self.setModel(self._model)
         self.clicked.connect(self._on_click)
@@ -1523,65 +1570,75 @@ class CategoryTree(QTreeView):
     def load(self, categories: list[tuple[str, int]], total: int, fav_count: int = 0, recent_count: int = 0, private_count: int = 0):
         self._model.clear()
 
-        # -- All Prompts (bold, full width)
-        all_item = QStandardItem(f"  All Prompts  ({total:,})")
-        all_item.setData("", Qt.ItemDataRole.UserRole)
-        all_item.setEditable(False)
-        f = all_item.font()
-        f.setBold(True)
-        all_item.setFont(f)
-        self._model.appendRow(all_item)
+        collections = QStandardItem("Collections")
+        collections.setData("collections", Qt.ItemDataRole.UserRole + 1)
+        collections.setEditable(False)
+        collections_font = collections.font()
+        collections_font.setBold(True)
+        collections.setFont(collections_font)
+        self._model.appendRow(collections)
 
-        # -- Favorites
-        fav_item = QStandardItem(f"  Favorites  ({fav_count:,})")
-        fav_item.setData(CAT_FAVORITES, Qt.ItemDataRole.UserRole)
-        fav_item.setEditable(False)
-        fav_item.setForeground(QColor(C["yellow"]))
-        self._model.appendRow(fav_item)
+        def add_collection(label: str, category: str, count: int, color: str | None = None) -> None:
+            item = QStandardItem(f"{label}  ({count:,})")
+            item.setData(category, Qt.ItemDataRole.UserRole)
+            item.setEditable(False)
+            if color:
+                item.setForeground(QColor(C[color]))
+            collections.appendRow(item)
 
-        # -- Recent
-        recent_item = QStandardItem(f"  Recent  ({recent_count:,})")
-        recent_item.setData(CAT_RECENT, Qt.ItemDataRole.UserRole)
-        recent_item.setEditable(False)
-        recent_item.setForeground(QColor(C["sapphire"]))
-        self._model.appendRow(recent_item)
+        add_collection("All Prompts", "", total)
+        add_collection("Favorites", CAT_FAVORITES, fav_count, "yellow")
+        add_collection("Recent", CAT_RECENT, recent_count, "sapphire")
+        add_collection("Private", CAT_PRIVATE, private_count, "teal")
 
-        # -- Private
-        private_item = QStandardItem(f"  Private  ({private_count:,})")
-        private_item.setData(CAT_PRIVATE, Qt.ItemDataRole.UserRole)
-        private_item.setEditable(False)
-        private_item.setForeground(QColor(C["teal"]))
-        self._model.appendRow(private_item)
-
-        # -- Visual separator
-        sep_item = QStandardItem("")
-        sep_item.setEnabled(False)
-        sep_item.setSelectable(False)
-        sep_item.setEditable(False)
-        sep_item.setSizeHint(QSize(0, 1))
-        sep_item.setBackground(QColor(C["surface0"]))
-        self._model.appendRow(sep_item)
-
-        # -- Category items
+        category_root = QStandardItem("Categories")
+        category_root.setData("categories", Qt.ItemDataRole.UserRole + 1)
+        category_root.setEditable(False)
+        category_font = category_root.font()
+        category_font.setBold(True)
+        category_root.setFont(category_font)
+        self._model.appendRow(category_root)
         for cat, count in categories:
             label = cat.replace("_", " ").title()
             item = QStandardItem(f"  {label}  ({count:,})")
             item.setData(cat, Qt.ItemDataRole.UserRole)
             item.setEditable(False)
             item.setForeground(QColor(C["subtext0"]))
-            self._model.appendRow(item)
+            category_root.appendRow(item)
 
-        self.setCurrentIndex(self._model.index(0, 0))
+        saved = set(str(self._settings.value(TREE_SETTINGS_KEY, "")).split(","))
+        for row, key in enumerate(("collections", "categories")):
+            index = self._model.index(row, 0)
+            self.setExpanded(index, key in saved or not saved)
+        self.setCurrentIndex(self._model.index(0, 0, self._model.index(0, 0)))
 
     def _on_click(self, index):
         item = self._model.itemFromIndex(index)
-        if item and item.isEnabled():
+        if item and item.isEnabled() and item.data(Qt.ItemDataRole.UserRole) is not None:
             self.category_selected.emit(item.data(Qt.ItemDataRole.UserRole) or "")
+
+    def save_expanded_state(self) -> None:
+        expanded = []
+        for row in range(self._model.rowCount()):
+            item = self._model.item(row)
+            if item and self.isExpanded(item.index()):
+                key = item.data(Qt.ItemDataRole.UserRole + 1)
+                if key:
+                    expanded.append(str(key))
+        self._settings.setValue(TREE_SETTINGS_KEY, ",".join(expanded))
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Slash and not event.text().isspace():
+            self.search_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 # -- Prompt list table ------------------------------------------------------
 class PromptTable(QTableView):
     prompt_selected = pyqtSignal(dict)
+    keyboard_action = pyqtSignal(str, dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1589,7 +1646,7 @@ class PromptTable(QTableView):
         self._model.setHorizontalHeaderLabels(["Score", "Title", "Category"])
         self.setModel(self._model)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setAlternatingRowColors(False)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
@@ -1634,6 +1691,27 @@ class PromptTable(QTableView):
         if 0 <= row < len(self._data):
             self.prompt_selected.emit(self._data[row])
 
+    def selected_records(self) -> list[dict]:
+        rows = sorted({index.row() for index in self.selectionModel().selectedRows()})
+        return [self._data[row] for row in rows if 0 <= row < len(self._data)]
+
+    def keyPressEvent(self, event):
+        row = self.currentIndex().row()
+        current = self._data[row] if 0 <= row < len(self._data) else None
+        if event.key() == Qt.Key.Key_Slash:
+            self.keyboard_action.emit("search", current or {})
+            event.accept()
+            return
+        if current and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.keyboard_action.emit("copy", current)
+            event.accept()
+            return
+        if current and event.key() == Qt.Key.Key_Space:
+            self.keyboard_action.emit("preview", current)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 # -- Quality pill -----------------------------------------------------------
 def _quality_pill(q: int) -> QLabel:
@@ -1663,6 +1741,7 @@ class PreviewPane(QWidget):
     preset_saved = pyqtSignal(dict)
     overlay_reset = pyqtSignal(str)
     status_requested = pyqtSignal(str, int)
+    editor_requested = pyqtSignal(dict, str)
     chain_step_requested = pyqtSignal(dict, dict)
     chain_copy_requested = pyqtSignal()
     chain_clear_requested = pyqtSignal()
@@ -1885,6 +1964,13 @@ class PreviewPane(QWidget):
         self.history_btn.clicked.connect(self._toggle_history)
         action_bar.addWidget(self.history_btn)
 
+        self.editor_btn = QPushButton("Editor")
+        self.editor_btn.setToolTip("Open an editable Markdown draft in the system text editor")
+        self.editor_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.editor_btn.setVisible(False)
+        self.editor_btn.clicked.connect(self._open_editor)
+        action_bar.addWidget(self.editor_btn)
+
         self.edit_btn = QPushButton("Edit")
         self.edit_btn.setToolTip("Edit this prompt in your local overlay")
         self.edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1987,6 +2073,7 @@ class PreviewPane(QWidget):
         self.copy_chain_btn.setVisible(not editing and self._chain_count > 0)
         self.clear_chain_btn.setVisible(not editing and self._chain_count > 0)
         self.history_btn.setVisible(not editing and has_history)
+        self.editor_btn.setVisible(not editing and has_prompt)
         self.edit_btn.setVisible(not editing)
         self.edit_btn.setEnabled(has_prompt)
         self.save_edit_btn.setVisible(editing)
@@ -2143,6 +2230,10 @@ class PreviewPane(QWidget):
         self.add_chain_btn.setEnabled(False)
         if IS_WIN and hasattr(self, "paste_btn"):
             self.paste_btn.setEnabled(False)
+
+    def _open_editor(self):
+        if self._current and not self._edit_mode:
+            self.editor_requested.emit(dict(self._current), self._resolved_body())
 
     def show_prompt(self, rec: dict):
         self._current = rec
@@ -2389,6 +2480,19 @@ class MainWindow(QMainWindow):
         self.new_private_btn.clicked.connect(self._new_private_prompt)
         tb.addWidget(self.new_private_btn)
 
+        self.bundle_export_btn = QPushButton("Export")
+        self.bundle_export_btn.setToolTip("Copy the selected prompts as a JSON or Markdown bundle")
+        self.bundle_export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        bundle_menu = QMenu(self.bundle_export_btn)
+        bundle_json_action = QAction("Selected as JSON", self)
+        bundle_json_action.triggered.connect(lambda: self._export_bundle("JSON"))
+        bundle_menu.addAction(bundle_json_action)
+        bundle_markdown_action = QAction("Selected as Markdown", self)
+        bundle_markdown_action.triggered.connect(lambda: self._export_bundle("Markdown"))
+        bundle_menu.addAction(bundle_markdown_action)
+        self.bundle_export_btn.setMenu(bundle_menu)
+        tb.addWidget(self.bundle_export_btn)
+
         tb.addSpacing(4)
 
         # Count badge
@@ -2440,13 +2544,16 @@ class MainWindow(QMainWindow):
 
         # -- Connections ----------------------------------------------------
         self.cat_tree.category_selected.connect(self._on_filter_changed)
+        self.cat_tree.search_requested.connect(self._focus_search)
         self.prompt_table.prompt_selected.connect(self.preview.show_prompt)
+        self.prompt_table.keyboard_action.connect(self._handle_table_keyboard)
         self.preview.paste_requested.connect(self._do_paste_to_window)
         self.preview.action_performed.connect(self._on_action)
         self.preview.favorite_toggled.connect(self._on_fav_toggled)
         self.preview.edit_saved.connect(self._on_edit_saved)
         self.preview.preset_saved.connect(self._on_preset_saved)
         self.preview.overlay_reset.connect(self._on_overlay_reset)
+        self.preview.editor_requested.connect(self._open_editor)
         self.preview.status_requested.connect(self.statusBar().showMessage)
         self.preview.chain_step_requested.connect(self._add_chain_step)
         self.preview.chain_copy_requested.connect(self._copy_chain)
@@ -2479,6 +2586,42 @@ class MainWindow(QMainWindow):
             self.search_input.clear()
         elif self.search_input.hasFocus():
             self.search_input.clearFocus()
+
+    def _handle_table_keyboard(self, action: str, record: dict):
+        if action == "search":
+            self._focus_search()
+            return
+        if not record:
+            return
+        if action == "preview":
+            self.preview.show_prompt(record)
+        elif action == "copy":
+            self.preview.show_prompt(record)
+            self.preview._copy_exported()
+
+    def _export_bundle(self, format_name: str):
+        records = self.prompt_table.selected_records()
+        if not records:
+            self.statusBar().showMessage("Select at least one prompt to export", 3000)
+            return
+        expanded: list[dict] = []
+        for record in records:
+            item = dict(record)
+            item["body"] = expand_prompt_includes(
+                str(item.get("body", "")), self.db.resolve_include_body
+            )
+            expanded.append(item)
+        QApplication.clipboard().setText(export_prompt_bundle(expanded, format_name))
+        self.statusBar().showMessage(
+            f"Copied {len(expanded)}-prompt {format_name.lower()} bundle", 3000
+        )
+
+    def _open_editor(self, record: dict, body: str):
+        path = write_editor_draft(record, body)
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self.statusBar().showMessage(f"Opened editor draft: {path.name}", 3000)
+        else:
+            self.statusBar().showMessage(f"Editor draft saved to {path}", 5000)
 
     def _refresh_tree(self):
         cats = self.db.categories()
@@ -2700,6 +2843,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("  ".join(parts), 5000)
 
     def closeEvent(self, event):
+        self.cat_tree.save_expanded_state()
         if not self._tray_available:
             self._quit_app()
             event.accept()

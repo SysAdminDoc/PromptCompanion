@@ -10,6 +10,8 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 - Quality scoring v2 with length, structure, variables, source rank, and review signals.
 - Deterministic stale/obsolete-model deprecation flags and reasons in the prompt schema and index.
 - Recency-aware BM25 ranking while preserving fast results-as-you-type search.
+- Persistent collection/category tree expansion state and keyboard-only prompt navigation.
+- Markdown editor drafts and multi-select JSON/Markdown bundle export.
 
 ## [0.8.1] - 2026-06-28
 
