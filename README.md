@@ -45,6 +45,8 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **Three-pane layout** — category tree | prompt list | preview
 - [x] **FTS5 search bar** — full-text search with prefix matching
 - [x] **Filter controls** — role, quality threshold, source, language
+- [x] **Model compatibility filter** — OpenAI, Anthropic, or local targets (`any` matches all)
+- [x] **Recency-aware search ranking** — BM25 with a small freshness boost
 - [x] **Translation metadata** — language tags, translation links, and validator checks for community translation PRs
 - [x] **Variable substitution** — fill `{{placeholders}}` inline, copy filled
 - [x] **Live preview stats** — filled previews show character and estimated token counts
@@ -61,6 +63,7 @@ action is "find the right prompt and copy it." No chat window, no accounts, no c
 - [x] **Global hotkey** — Win+Shift+P summons window from anywhere (Windows)
 - [x] **Paste-to-active-window** — copies prompt and pastes into previous window
 - [x] **Export profiles** — Plain Text, Markdown, Front Matter, or JSON copy
+- [x] **Optional provider handoff** — ChatGPT, Claude, or local Ollama URL launch
 - [x] **PyInstaller build** — `python build.py` produces a single `PromptCompanion.exe`
 
 ## Bundled Sources
@@ -146,6 +149,9 @@ Bundles the prompt database and logo. User data (favorites, history) stored in `
 Local prompt edits and per-prompt variable presets are layered from `overlay.jsonl` in the same user data directory, so bundled source prompts remain immutable.
 Set `PROMPTCOMPANION_PRIVATE_PASSPHRASE` before launch to encrypt private prompt lines in the overlay file.
 Place user `.md` prompts in `~/.promptcompanion/imports/` for the standalone app, or `data/user/imports/` when running from source.
+Provider handoff is disabled by default. Set `PROMPTCOMPANION_PROVIDER_HANDOFF=1` before launch to show
+the ChatGPT, Claude, and Ollama handoff menu. Install `tiktoken` locally to use model-aware BPE token
+counts; without it, the app uses a dependency-free estimate.
 
 ## Prompt Record Schema
 

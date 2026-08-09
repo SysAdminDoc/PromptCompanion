@@ -12,6 +12,7 @@ All notable changes to PromptCompanion are documented in this file. Format follo
 - Recency-aware BM25 ranking while preserving fast results-as-you-type search.
 - Persistent collection/category tree expansion state and keyboard-only prompt navigation.
 - Markdown editor drafts and multi-select JSON/Markdown bundle export.
+- Optional ChatGPT/Claude/Ollama URL handoff, local tiktoken token estimates, and model-provider filtering.
 
 ## [0.8.1] - 2026-06-28
 

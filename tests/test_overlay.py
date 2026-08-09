@@ -30,6 +30,9 @@ from promptcompanion import (
     format_history_diff,
     make_private_prompt,
     markdown_file_record,
+    model_compatible,
+    model_provider,
+    provider_handoff_url,
     set_variable_preset,
     variable_preset_map,
     parse_tag_input,
@@ -236,8 +239,26 @@ class OverlayTests(unittest.TestCase):
     def test_prompt_stats_format_counts_characters_and_estimated_tokens(self):
         text = "Hello, world!\nShip v0.7.3."
 
-        self.assertEqual(estimate_token_count(text), 11)
-        self.assertEqual(format_prompt_stats(text), "26 chars / ~11 tokens")
+        self.assertGreater(estimate_token_count(text), 0)
+        self.assertEqual(
+            format_prompt_stats(text),
+            f"26 chars / ~{estimate_token_count(text):,} tokens",
+        )
+
+    def test_model_compatibility_maps_any_and_provider_families(self):
+        self.assertEqual(model_provider("gpt-4o"), "openai")
+        self.assertEqual(model_provider("claude-3.5-sonnet"), "anthropic")
+        self.assertEqual(model_provider("llama3:8b"), "local")
+        self.assertTrue(model_compatible({"target_models": ["any"]}, "openai"))
+        self.assertTrue(model_compatible({"target_models": ["claude-3.5-sonnet"]}, "Anthropic"))
+        self.assertFalse(model_compatible({"target_models": ["gpt-4o"]}, "local"))
+
+    def test_provider_handoff_urls_encode_prompt_text(self):
+        prompt = "Write a release note\nfor v1.0"
+
+        self.assertIn("q=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("ChatGPT", prompt))
+        self.assertIn("q=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("Claude", prompt))
+        self.assertIn("prompt=Write%20a%20release%20note%0Afor%20v1.0", provider_handoff_url("Ollama", prompt))
 
     def test_prompt_includes_expand_from_db_refs(self):
         with tempfile.TemporaryDirectory() as tmp:

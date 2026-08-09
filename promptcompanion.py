@@ -26,12 +26,18 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
 except ImportError:  # Optional: only needed when private prompt encryption is enabled.
     Fernet = None
     InvalidToken = Exception
+
+try:
+    import tiktoken
+except ImportError:  # Optional local tokenizer; the dependency-free estimate remains available.
+    tiktoken = None
 
 IS_WIN = sys.platform == "win32"
 
@@ -481,6 +487,46 @@ QToolTip {{
 VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]{0,63})\s*\}\}")
 INCLUDE_RE = re.compile(r"\{\{\s*include:([a-zA-Z0-9_.:/-]{1,180})\s*\}\}")
 TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+_TIKTOKEN_ENCODER = None
+
+PROVIDER_HANDOFF_ENV = "PROMPTCOMPANION_PROVIDER_HANDOFF"
+PROVIDER_HANDOFF_ENABLED = os.environ.get(PROVIDER_HANDOFF_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+MODEL_PROVIDERS = ("OpenAI", "Anthropic", "Local")
+
+
+def model_provider(model: str) -> str:
+    value = str(model).strip().casefold()
+    if not value or value == "any":
+        return "any"
+    if any(token in value for token in ("gpt", "o1", "o3", "o4", "openai")):
+        return "openai"
+    if "claude" in value or "anthropic" in value:
+        return "anthropic"
+    if any(token in value for token in ("ollama", "llama", "mistral", "mixtral", "qwen", "phi", "gemma", "local")):
+        return "local"
+    return ""
+
+
+def model_compatible(record: dict, provider: str) -> bool:
+    wanted = str(provider or "").strip().casefold()
+    if not wanted:
+        return True
+    models = parse_json_list(record.get("target_models"), ["any"])
+    return any(model_provider(model) in {"any", wanted} for model in models)
+
+
+def provider_handoff_url(provider: str, prompt: str) -> str:
+    encoded = quote(str(prompt), safe="")
+    key = str(provider).strip().casefold()
+    if key == "chatgpt":
+        return f"https://chatgpt.com/?q={encoded}"
+    if key == "claude":
+        return f"https://claude.ai/new?q={encoded}"
+    if key == "ollama":
+        base = os.environ.get("PROMPTCOMPANION_OLLAMA_URL", "http://localhost:11434/")
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}prompt={encoded}"
+    raise ValueError(f"Unknown provider: {provider}")
 
 # -- Special category keys -------------------------------------------------
 CAT_FAVORITES = "__favorites__"
@@ -786,10 +832,25 @@ def fill_prompt_body(body: str, values: dict[str, str], include_resolver=None) -
     return filled
 
 
-def estimate_token_count(text: str) -> int:
+def _estimate_tokens_heuristic(text: str) -> int:
     if not text.strip():
         return 0
     return len(TOKEN_RE.findall(text))
+
+
+def estimate_token_count(text: str) -> int:
+    """Estimate local token usage with tiktoken when available."""
+    if not text.strip():
+        return 0
+    global _TIKTOKEN_ENCODER
+    if tiktoken is not None:
+        try:
+            if _TIKTOKEN_ENCODER is None:
+                _TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+            return len(_TIKTOKEN_ENCODER.encode(text, disallowed_special=()))
+        except (AttributeError, KeyError, RuntimeError, ValueError):
+            _TIKTOKEN_ENCODER = False
+    return _estimate_tokens_heuristic(text)
 
 
 def recency_boost(updated: str, now: datetime | None = None, half_life_days: int = 180) -> float:
@@ -1228,6 +1289,7 @@ class PromptDB:
         source: str,
         language: str,
         include_deprecated: bool = False,
+        provider: str = "",
     ) -> bool:
         if category == CAT_PRIVATE:
             if not rec.get("private"):
@@ -1243,6 +1305,8 @@ class PromptDB:
         if language and rec.get("language") != language:
             return False
         if not include_deprecated and rec.get("deprecated"):
+            return False
+        if provider and not model_compatible(rec, provider):
             return False
         return True
 
@@ -1286,7 +1350,8 @@ class PromptDB:
 
     def search(self, query: str = "", category: str = "", role: str = "",
                min_quality: int = 0, source: str = "", language: str = "",
-               include_deprecated: bool = False, limit: int = 500) -> list[dict]:
+               include_deprecated: bool = False, limit: int = 500,
+               provider: str = "") -> list[dict]:
         fts_active = False
         conditions: list[str] = []
         params: list = []
@@ -1320,7 +1385,7 @@ class PromptDB:
         where_extra = f"AND {' AND '.join(conditions)}" if conditions else ""
 
         if fts_active:
-            params.append(limit)
+            params.append(max(limit, 5000) if provider else limit)
             sql = f"""
                 SELECT {self._select_sql('p')},
                        bm25(prompts_fts, 10.0, 1.0, 5.0, 2.0)
@@ -1333,10 +1398,15 @@ class PromptDB:
             """
             rows = self.conn.execute(sql, params).fetchall()
             results = self.overlay.apply_many([dict(r) for r in rows]) if self.overlay else [dict(r) for r in rows]
+            if not self.overlay and provider:
+                results = [
+                    r for r in results
+                    if self._matches_filters(r, category, role, min_quality, source, language, include_deprecated, provider)
+                ]
             if self.overlay:
                 results = [
                     r for r in results
-                    if self._matches_filters(r, category, role, min_quality, source, language, include_deprecated)
+                    if self._matches_filters(r, category, role, min_quality, source, language, include_deprecated, provider)
                     and self._matches_query(r, query)
                 ]
                 seen = {r["id"] for r in results}
@@ -1348,7 +1418,7 @@ class PromptDB:
                     )
                     if not rec:
                         continue
-                    if self._matches_filters(rec, category, role, min_quality, source, language, include_deprecated) and self._matches_query(rec, query):
+                    if self._matches_filters(rec, category, role, min_quality, source, language, include_deprecated, provider) and self._matches_query(rec, query):
                         results.append(rec)
             return results[:limit]
 
@@ -1357,7 +1427,7 @@ class PromptDB:
             records = self.overlay.apply_many(records)
         results = [
             rec for rec in records
-            if self._matches_filters(rec, category, role, min_quality, source, language, include_deprecated)
+            if self._matches_filters(rec, category, role, min_quality, source, language, include_deprecated, provider)
         ]
         results.sort(key=lambda r: (-int(r.get("quality") or 0), str(r.get("title", "")).casefold()))
         return results[:limit]
@@ -1742,6 +1812,7 @@ class PreviewPane(QWidget):
     overlay_reset = pyqtSignal(str)
     status_requested = pyqtSignal(str, int)
     editor_requested = pyqtSignal(dict, str)
+    provider_requested = pyqtSignal(str, str)
     chain_step_requested = pyqtSignal(dict, dict)
     chain_copy_requested = pyqtSignal()
     chain_clear_requested = pyqtSignal()
@@ -1971,6 +2042,19 @@ class PreviewPane(QWidget):
         self.editor_btn.clicked.connect(self._open_editor)
         action_bar.addWidget(self.editor_btn)
 
+        if PROVIDER_HANDOFF_ENABLED:
+            self.send_btn = QPushButton("Send")
+            self.send_btn.setObjectName("accentBtn")
+            self.send_btn.setToolTip("Open this prompt in an external provider")
+            self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            send_menu = QMenu(self.send_btn)
+            for provider in ("ChatGPT", "Claude", "Ollama"):
+                action = QAction(provider, self)
+                action.triggered.connect(lambda _checked=False, name=provider: self._send_to_provider(name))
+                send_menu.addAction(action)
+            self.send_btn.setMenu(send_menu)
+            action_bar.addWidget(self.send_btn)
+
         self.edit_btn = QPushButton("Edit")
         self.edit_btn.setToolTip("Edit this prompt in your local overlay")
         self.edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2074,6 +2158,8 @@ class PreviewPane(QWidget):
         self.clear_chain_btn.setVisible(not editing and self._chain_count > 0)
         self.history_btn.setVisible(not editing and has_history)
         self.editor_btn.setVisible(not editing and has_prompt)
+        if hasattr(self, "send_btn"):
+            self.send_btn.setVisible(not editing and has_prompt)
         self.edit_btn.setVisible(not editing)
         self.edit_btn.setEnabled(has_prompt)
         self.save_edit_btn.setVisible(editing)
@@ -2234,6 +2320,11 @@ class PreviewPane(QWidget):
     def _open_editor(self):
         if self._current and not self._edit_mode:
             self.editor_requested.emit(dict(self._current), self._resolved_body())
+
+    def _send_to_provider(self, provider: str):
+        if self._current and not self._edit_mode:
+            body = self._get_filled_body() if self._var_inputs else self._resolved_body()
+            self.provider_requested.emit(provider, body)
 
     def show_prompt(self, rec: dict):
         self._current = rec
@@ -2474,6 +2565,19 @@ class MainWindow(QMainWindow):
         self.language_combo.setToolTip("Filter by prompt language")
         tb.addWidget(self.language_combo)
 
+        self.model_combo = QComboBox()
+        self.model_combo.addItem("Any Model")
+        self.model_combo.addItems(MODEL_PROVIDERS)
+        self.model_combo.setFixedWidth(105)
+        self.model_combo.setToolTip("Filter by target model provider")
+        tb.addWidget(self.model_combo)
+
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(["Current", "Include Deprecated"])
+        self.status_combo.setFixedWidth(125)
+        self.status_combo.setToolTip("Hide or include prompts flagged as deprecated")
+        tb.addWidget(self.status_combo)
+
         self.new_private_btn = QPushButton("New Private")
         self.new_private_btn.setToolTip("Create a local-only private prompt")
         self.new_private_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2554,6 +2658,7 @@ class MainWindow(QMainWindow):
         self.preview.preset_saved.connect(self._on_preset_saved)
         self.preview.overlay_reset.connect(self._on_overlay_reset)
         self.preview.editor_requested.connect(self._open_editor)
+        self.preview.provider_requested.connect(self._send_to_provider)
         self.preview.status_requested.connect(self.statusBar().showMessage)
         self.preview.chain_step_requested.connect(self._add_chain_step)
         self.preview.chain_copy_requested.connect(self._copy_chain)
@@ -2562,6 +2667,8 @@ class MainWindow(QMainWindow):
         self.quality_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.source_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.language_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.model_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.status_combo.currentIndexChanged.connect(self._on_filter_changed)
 
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
@@ -2622,6 +2729,16 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Opened editor draft: {path.name}", 3000)
         else:
             self.statusBar().showMessage(f"Editor draft saved to {path}", 5000)
+
+    def _send_to_provider(self, provider: str, body: str):
+        url = provider_handoff_url(provider, body)
+        if QDesktopServices.openUrl(QUrl(url)):
+            self.statusBar().showMessage(f"Opened {provider} handoff", 3000)
+        else:
+            QApplication.clipboard().setText(body)
+            self.statusBar().showMessage(
+                f"Could not open {provider}; prompt copied to clipboard", 5000
+            )
 
     def _refresh_tree(self):
         cats = self.db.categories()
@@ -2789,17 +2906,35 @@ class MainWindow(QMainWindow):
         min_quality = 60 if "60" in self.quality_combo.currentText() else 40 if "40" in self.quality_combo.currentText() else 20 if "20" in self.quality_combo.currentText() else 0
         source = "" if self.source_combo.currentText() == "Any Source" else self.source_combo.currentText()
         language = "" if self.language_combo.currentText() == "Any Lang" else self.language_combo.currentText()
+        provider = "" if self.model_combo.currentText() == "Any Model" else self.model_combo.currentText().casefold()
+        include_deprecated = self.status_combo.currentText() == "Include Deprecated"
 
         if category == CAT_FAVORITES:
             fav_ids = list(self.user_db.favorite_ids())
             results = self.db.get_by_ids(fav_ids) if fav_ids else []
+            results = [
+                rec for rec in results
+                if self.db._matches_filters(rec, "", role, min_quality, source, language, include_deprecated, provider)
+            ]
         elif category == CAT_RECENT:
             recent_ids = self.user_db.recent_ids(100)
             results = self.db.get_by_ids(recent_ids) if recent_ids else []
+            results = [
+                rec for rec in results
+                if self.db._matches_filters(rec, "", role, min_quality, source, language, include_deprecated, provider)
+            ]
         elif category == CAT_PRIVATE:
-            results = self.db.search(query=query, category=CAT_PRIVATE, role=role, min_quality=min_quality, source=source, language=language)
+            results = self.db.search(
+                query=query, category=CAT_PRIVATE, role=role, min_quality=min_quality,
+                source=source, language=language, include_deprecated=include_deprecated,
+                provider=provider,
+            )
         else:
-            results = self.db.search(query=query, category=category, role=role, min_quality=min_quality, source=source, language=language)
+            results = self.db.search(
+                query=query, category=category, role=role, min_quality=min_quality,
+                source=source, language=language, include_deprecated=include_deprecated,
+                provider=provider,
+            )
 
         self.prompt_table.load(results)
         n = len(results)
@@ -2826,7 +2961,7 @@ class MainWindow(QMainWindow):
                 "Create one from the toolbar to keep it local."
             )
             self.preview.stack.setCurrentIndex(0)
-        elif n == 0 and (query or role or min_quality or source or language):
+        elif n == 0 and (query or role or min_quality or source or language or provider or include_deprecated):
             self.preview.show_no_results()
         elif n == 0:
             self.preview.show_welcome()
@@ -2840,6 +2975,10 @@ class MainWindow(QMainWindow):
             parts.append("in private prompts")
         if language:
             parts.append(f"language {language}")
+        if provider:
+            parts.append(f"for {provider}")
+        if include_deprecated:
+            parts.append("including deprecated")
         self.statusBar().showMessage("  ".join(parts), 5000)
 
     def closeEvent(self, event):
