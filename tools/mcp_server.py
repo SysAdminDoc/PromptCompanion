@@ -323,7 +323,10 @@ def serve_stdio(
                 "error": {"code": -32700, "message": f"Parse error: {exc}"},
             }
         if response is not None:
-            output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
+            # Windows PowerShell can expose a CP1252 text stream.  ASCII
+            # escaping keeps the JSON-RPC transport lossless and encoding-safe;
+            # clients recover the original Unicode when they parse the JSON.
+            output_stream.write(json.dumps(response, ensure_ascii=True) + "\n")
             output_stream.flush()
     return 0
 
