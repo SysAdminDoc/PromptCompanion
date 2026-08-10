@@ -408,3 +408,14 @@ Initial scaffold — data foundation phase.
 - GUI is deliberately out of scope for `0.0.x`. Data quality first.
 - Upstream clones live under `data/sources/upstream/` and are gitignored; only the
   cleaned JSONL output under `data/prompts/` is committed.
+
+## Roadmap archive — 2026-08-10 — ROADMAP.md
+
+<details>
+<summary>Original roadmap snapshot</summary>
+
+```markdown
+# PromptCompanion Roadmap
+```
+
+</details>
